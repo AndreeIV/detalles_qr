@@ -373,7 +373,7 @@ export default function BuilderDashboardPage() {
                 {/* Right Hero Interactive Phone Showcase */}
                 <div className="lg:col-span-5 flex flex-col items-center">
                   <div className="mb-3 flex items-center gap-1.5 text-xs text-zinc-400">
-                    <span>Prueba cambiar de temática en vivo:</span>
+                    {/* <span>Prueba cambiar de temática en vivo:</span> */}
                     {THEME_LIST.map((item) => (
                       <button
                         key={item.id}
