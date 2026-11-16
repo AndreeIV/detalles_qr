@@ -4,9 +4,11 @@ import { ArrowLeft, QrCode, Sparkles } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
+import AmbientBackground from "@/components/AmbientBackground";
 import GiftExperience from "@/components/GiftExperience";
 import {
   createDemoGiftForSlug,
+  fetchGiftCloudOrLocal,
   type GiftData,
   getGiftFromStorage,
   THEMES,
@@ -22,14 +24,30 @@ function RecipientExperienceContent() {
   const [isStoredGift, setIsStoredGift] = useState(false);
 
   useEffect(() => {
-    const saved = getGiftFromStorage(slug);
-    if (saved) {
-      setGift(saved);
+    let isMounted = true;
+
+    // 1. Fast check in localStorage if on same device
+    const localSaved = getGiftFromStorage(slug);
+    if (localSaved) {
+      setGift(localSaved);
       setIsStoredGift(true);
-    } else {
-      setGift(createDemoGiftForSlug(slug));
-      setIsStoredGift(false);
     }
+
+    // 2. Cloud check in Supabase (works across any device/phone!)
+    fetchGiftCloudOrLocal(slug).then((cloudOrLocalGift) => {
+      if (!isMounted) return;
+      if (cloudOrLocalGift) {
+        setGift(cloudOrLocalGift);
+        setIsStoredGift(true);
+      } else if (!localSaved) {
+        setGift(createDemoGiftForSlug(slug));
+        setIsStoredGift(false);
+      }
+    });
+
+    return () => {
+      isMounted = false;
+    };
   }, [slug]);
 
   const handleQuickDemoTheme = (nextTheme: ThemeId) => {
@@ -44,6 +62,8 @@ function RecipientExperienceContent() {
 
   return (
     <div className="relative min-h-dvh bg-zinc-950 text-zinc-100 flex flex-col">
+      <AmbientBackground theme={gift.theme} />
+
       {/* Subtle Top Bar for SaaS Viral Loop & Demo Theme Switcher */}
       <div className="fixed top-3 left-3 right-3 z-40 flex items-center justify-between pointer-events-none">
         <Link
@@ -75,7 +95,7 @@ function RecipientExperienceContent() {
       </div>
 
       {/* Main Recipient Experience (Splash Unlock -> Themed Card) */}
-      <main className="flex-1">
+      <main className="relative z-10 flex-1">
         <GiftExperience gift={gift} />
       </main>
 

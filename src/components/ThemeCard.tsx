@@ -2,6 +2,7 @@
 
 import {
   CalendarHeart,
+  Clock,
   Flame,
   Flower2,
   Heart,
@@ -10,10 +11,17 @@ import {
   Play,
   Sparkles,
   Trophy,
+  Tv,
   Volume2,
 } from "lucide-react";
 import Image from "next/image";
-import { type GiftData, THEMES } from "@/types/gift";
+import { useEffect, useRef, useState } from "react";
+import {
+  formatSecondsToMmSs,
+  type GiftData,
+  parseMusicUrl,
+  THEMES,
+} from "@/types/gift";
 
 interface ThemeCardProps {
   gift: GiftData;
@@ -35,7 +43,7 @@ export default function ThemeCard({
   const recipient = gift.recipientName.trim() || "Persona Especial";
   const sender = gift.senderName.trim() || "Alguien que te quiere";
   const dedication = gift.message.trim() || themeMeta.defaultMessage;
-  const songLabel = gift.songTitle || themeMeta.defaultSong;
+  const songLabel = gift.songTitle?.trim() || themeMeta.defaultSong;
 
   if (gift.theme === "hotwheels") {
     return (
@@ -116,8 +124,9 @@ export default function ThemeCard({
             </div>
           </div>
 
-          {/* Simulated Music Player */}
+          {/* Music Player (Spotify / YouTube / Simulated) */}
           <MusicPlayerBar
+            gift={gift}
             isPlaying={isPlaying}
             onTogglePlay={onTogglePlay}
             songLabel={songLabel}
@@ -210,8 +219,9 @@ export default function ThemeCard({
             </div>
           </div>
 
-          {/* Simulated Music Player */}
+          {/* Music Player (Spotify / YouTube / Simulated) */}
           <MusicPlayerBar
+            gift={gift}
             isPlaying={isPlaying}
             onTogglePlay={onTogglePlay}
             songLabel={songLabel}
@@ -301,8 +311,9 @@ export default function ThemeCard({
           </div>
         </div>
 
-        {/* Simulated Music Player */}
+        {/* Music Player (Spotify / YouTube / Simulated) */}
         <MusicPlayerBar
+          gift={gift}
           isPlaying={isPlaying}
           onTogglePlay={onTogglePlay}
           songLabel={songLabel}
@@ -316,6 +327,7 @@ export default function ThemeCard({
 }
 
 interface MusicPlayerBarProps {
+  gift: GiftData;
   isPlaying: boolean;
   onTogglePlay: () => void;
   songLabel: string;
@@ -325,6 +337,7 @@ interface MusicPlayerBarProps {
 }
 
 function MusicPlayerBar({
+  gift,
   isPlaying,
   onTogglePlay,
   songLabel,
@@ -332,6 +345,174 @@ function MusicPlayerBar({
   barColorClass,
   containerClass,
 }: MusicPlayerBarProps) {
+  const [showYoutubeVideo, setShowYoutubeVideo] = useState(false);
+
+  const parsed = parseMusicUrl(gift.musicUrl);
+  const startSec = Math.max(0, Math.floor(gift.musicStartSeconds ?? 0));
+  const clipDuration = gift.musicClipDuration ?? 30;
+
+  // Debounce startSec so dragging the slider in Step 4 seeks cleanly once settled
+  const [settledStartSec, setSettledStartSec] = useState(startSec);
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setSettledStartSec(startSec);
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [startSec]);
+
+  const rangeLabel =
+    clipDuration > 0
+      ? `${formatSecondsToMmSs(startSec)} – ${formatSecondsToMmSs(startSec + clipDuration)}`
+      : `Desde ${formatSecondsToMmSs(startSec)}`;
+
+  // 1) Official Spotify IFrame API Player (seeks to settledStartSec & unmounts when paused/stopped!)
+  if (parsed.provider === "spotify" && parsed.id) {
+    const kind = parsed.spotifyKind || "track";
+
+    return (
+      <div className={`rounded-2xl border p-2.5 space-y-2 ${containerClass}`}>
+        <div className="flex items-center justify-between gap-2 px-1 text-[11px]">
+          <div className="flex items-center gap-2 min-w-0">
+            <button
+              type="button"
+              onClick={onTogglePlay}
+              aria-label={
+                isPlaying
+                  ? "Detener reproductor Spotify"
+                  : "Reproducir fragmento Spotify"
+              }
+              className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 transition-transform active:scale-95 shadow cursor-pointer ${
+                isPlaying
+                  ? "bg-emerald-500 text-zinc-950"
+                  : "bg-zinc-800 hover:bg-zinc-700 text-emerald-400"
+              }`}
+            >
+              {isPlaying ? (
+                <Pause className="w-3.5 h-3.5 fill-current" />
+              ) : (
+                <Play className="w-3.5 h-3.5 fill-current ml-0.5" />
+              )}
+            </button>
+            <div className="min-w-0">
+              <p className="font-semibold text-emerald-400 truncate">
+                Spotify • {songLabel}
+              </p>
+              <p className="text-[10px] text-zinc-400">
+                {isPlaying
+                  ? `Sonando desde ${formatSecondsToMmSs(settledStartSec)}`
+                  : `Listo en ${formatSecondsToMmSs(startSec)} • Toca Play`}
+              </p>
+            </div>
+          </div>
+
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-[10px] font-mono text-emerald-300 shrink-0">
+            <Clock className="w-2.5 h-2.5" />
+            {rangeLabel}
+          </span>
+        </div>
+
+        {isPlaying && (
+          <SpotifyControllerEmbed
+            key={`${parsed.id}-${settledStartSec}-${clipDuration}`}
+            spotifyKind={kind}
+            spotifyId={parsed.id}
+            startSec={settledStartSec}
+            clipDuration={clipDuration}
+          />
+        )}
+      </div>
+    );
+  }
+
+  // 2) YouTube Custom Story-Clip Player (starts at settledStartSec and loops back to settledStartSec!)
+  if (parsed.provider === "youtube" && parsed.id) {
+    return (
+      <div className={`rounded-2xl border p-2.5 space-y-2 ${containerClass}`}>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={onTogglePlay}
+            aria-label={isPlaying ? "Pausar música" : "Reproducir música"}
+            className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 transition-transform active:scale-95 shadow cursor-pointer ${accentClass}`}
+          >
+            {isPlaying ? (
+              <Pause className="w-4 h-4 fill-current" />
+            ) : (
+              <Play className="w-4 h-4 fill-current ml-0.5" />
+            )}
+          </button>
+
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1.5 text-[11px] font-semibold text-zinc-100 truncate">
+              <Music className="w-3 h-3 shrink-0 opacity-80" />
+              <span className="truncate">
+                {isPlaying ? `🎵 ${songLabel}` : `En pausa • ${songLabel}`}
+              </span>
+            </div>
+            <div className="flex items-center gap-2 mt-0.5">
+              <span className="inline-flex items-center gap-1 text-[10px] font-mono text-amber-300">
+                <Clock className="w-2.5 h-2.5" />
+                {rangeLabel}
+              </span>
+              {isPlaying && (
+                <button
+                  type="button"
+                  onClick={() => setShowYoutubeVideo((v) => !v)}
+                  className="inline-flex items-center gap-1 text-[10px] text-zinc-400 hover:text-zinc-200 underline cursor-pointer"
+                >
+                  <Tv className="w-2.5 h-2.5" />
+                  <span>
+                    {showYoutubeVideo ? "Ocultar video" : "Ver video"}
+                  </span>
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Equalizer animation */}
+          <div
+            className="flex items-end gap-0.5 h-4 px-1 shrink-0"
+            aria-hidden="true"
+          >
+            <span
+              className={`w-1 h-full rounded-full origin-bottom ${barColorClass} ${
+                isPlaying ? "animate-eq-1" : "scale-y-25"
+              }`}
+            />
+            <span
+              className={`w-1 h-full rounded-full origin-bottom ${barColorClass} ${
+                isPlaying ? "animate-eq-2" : "scale-y-50"
+              }`}
+            />
+            <span
+              className={`w-1 h-full rounded-full origin-bottom ${barColorClass} ${
+                isPlaying ? "animate-eq-3" : "scale-y-35"
+              }`}
+            />
+            <span
+              className={`w-1 h-full rounded-full origin-bottom ${barColorClass} ${
+                isPlaying ? "animate-eq-4" : "scale-y-25"
+              }`}
+            />
+          </div>
+        </div>
+
+        {/* Only mounted while isPlaying === true so pausing or changing step stops audio immediately! */}
+        {isPlaying && (
+          <YouTubeClipEmbed
+            key={`${parsed.id}-${settledStartSec}-${clipDuration}`}
+            videoId={parsed.id}
+            startSec={settledStartSec}
+            clipDuration={clipDuration}
+            showVideo={showYoutubeVideo}
+            songLabel={songLabel}
+          />
+        )}
+      </div>
+    );
+  }
+
+  // 3) Default Simulated Music Player
   return (
     <div
       className={`rounded-2xl border p-2.5 flex items-center gap-3 ${containerClass}`}
@@ -340,7 +521,7 @@ function MusicPlayerBar({
         type="button"
         onClick={onTogglePlay}
         aria-label={isPlaying ? "Pausar música" : "Reproducir música"}
-        className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 transition-transform active:scale-95 shadow ${accentClass}`}
+        className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 transition-transform active:scale-95 shadow cursor-pointer ${accentClass}`}
       >
         {isPlaying ? (
           <Pause className="w-4 h-4 fill-current" />
@@ -388,6 +569,252 @@ function MusicPlayerBar({
         />
         <Volume2 className="w-3.5 h-3.5 text-zinc-400 ml-1" />
       </div>
+    </div>
+  );
+}
+
+/**
+ * YouTube Clip Embed that starts strictly at `startSec` and loops back to `startSec`
+ * (never to 00:00) whenever `clipDuration` elapses or the video ends.
+ */
+function YouTubeClipEmbed({
+  videoId,
+  startSec,
+  clipDuration,
+  showVideo,
+  songLabel,
+}: {
+  videoId: string;
+  startSec: number;
+  clipDuration: number;
+  showVideo: boolean;
+  songLabel: string;
+}) {
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const [reloadCount, setReloadCount] = useState(0);
+
+  const seekToStart = () => {
+    const win = iframeRef.current?.contentWindow;
+    if (!win) return;
+    try {
+      win.postMessage(
+        JSON.stringify({
+          event: "command",
+          func: "seekTo",
+          args: [startSec, true],
+        }),
+        "*",
+      );
+      win.postMessage(
+        JSON.stringify({
+          event: "command",
+          func: "playVideo",
+          args: [],
+        }),
+        "*",
+      );
+    } catch {
+      setReloadCount((c) => c + 1);
+    }
+  };
+
+  useEffect(() => {
+    if (clipDuration <= 0) return;
+    const interval = setInterval(() => {
+      seekToStart();
+    }, clipDuration * 1000);
+    return () => clearInterval(interval);
+  });
+
+  const ytParams = new URLSearchParams({
+    autoplay: "1",
+    start: String(startSec),
+    enablejsapi: "1",
+    playsinline: "1",
+    rel: "0",
+    modestbranding: "1",
+  });
+  const ytEmbedUrl = `https://www.youtube.com/embed/${videoId}?${ytParams.toString()}`;
+
+  return (
+    <div
+      className={
+        showVideo
+          ? "rounded-xl overflow-hidden bg-black aspect-video w-full"
+          : "w-px h-px overflow-hidden opacity-0 pointer-events-none absolute"
+      }
+    >
+      <iframe
+        ref={iframeRef}
+        key={`${videoId}-${startSec}-${reloadCount}`}
+        src={ytEmbedUrl}
+        title={`Audio de ${songLabel}`}
+        width="100%"
+        height="100%"
+        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+        onLoad={() => {
+          // Ensure YouTube jumps to startSec immediately after iframe load
+          if (startSec > 0) {
+            setTimeout(seekToStart, 350);
+          }
+        }}
+        className="border-0 w-full h-full"
+      />
+    </div>
+  );
+}
+
+interface SpotifyEmbedController {
+  play: () => void;
+  pause: () => void;
+  seek: (seconds: number) => void;
+  destroy: () => void;
+  addListener: (
+    event: string,
+    cb: (e: {
+      data?: { position?: number; duration?: number; isPaused?: boolean };
+    }) => void,
+  ) => void;
+}
+
+interface SpotifyIframeApi {
+  createController: (
+    element: HTMLElement,
+    options: { uri: string; width: string; height: number },
+    callback: (controller: SpotifyEmbedController) => void,
+  ) => void;
+}
+
+declare global {
+  interface Window {
+    SpotifyIframeApi?: SpotifyIframeApi;
+    onSpotifyIframeApiReady?: (api: SpotifyIframeApi) => void;
+  }
+}
+
+/**
+ * Uses Spotify's official IFrame API (EmbedController) to seek to `startSec`,
+ * enforce the selected fragment window, and destroy cleanly on unmount.
+ */
+function SpotifyControllerEmbed({
+  spotifyKind,
+  spotifyId,
+  startSec,
+  clipDuration,
+}: {
+  spotifyKind: "track" | "album" | "playlist";
+  spotifyId: string;
+  startSec: number;
+  clipDuration: number;
+}) {
+  const mountRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let controllerInstance: SpotifyEmbedController | null = null;
+    let isCancelled = false;
+    let hasInitialSeeked = false;
+
+    const initController = (api: SpotifyIframeApi) => {
+      if (isCancelled || !mountRef.current) return;
+      api.createController(
+        mountRef.current,
+        {
+          uri: `spotify:${spotifyKind}:${spotifyId}`,
+          width: "100%",
+          height: 80,
+        },
+        (controller) => {
+          if (isCancelled) {
+            try {
+              controller.destroy();
+            } catch {
+              // Ignore
+            }
+            return;
+          }
+          controllerInstance = controller;
+
+          controller.addListener("ready", () => {
+            if (startSec > 0) {
+              controller.seek(startSec);
+            }
+            controller.play();
+          });
+
+          controller.addListener("playback_update", (e) => {
+            const posMs = e.data?.position ?? 0;
+            const durMs = e.data?.duration ?? 0;
+            const posSec = posMs / 1000;
+            const durSec = durMs / 1000;
+
+            if (durSec <= 0) return;
+
+            // If Spotify is in 30-second unauthenticated preview mode (durSec <= 32),
+            // clamp target start within [0, durSec - 8] so it never overflows and resets to 0!
+            const effectiveStart =
+              durSec <= 32
+                ? Math.min(startSec, Math.max(0, Math.floor(durSec - 10)))
+                : startSec;
+
+            if (
+              !hasInitialSeeked &&
+              effectiveStart > 0 &&
+              posSec < effectiveStart - 0.8
+            ) {
+              hasInitialSeeked = true;
+              controller.seek(effectiveStart);
+              return;
+            }
+
+            if (
+              clipDuration > 0 &&
+              durSec > effectiveStart + 4 &&
+              posSec >= effectiveStart + clipDuration
+            ) {
+              controller.seek(effectiveStart);
+            }
+          });
+        },
+      );
+    };
+
+    if (typeof window !== "undefined") {
+      if (window.SpotifyIframeApi) {
+        initController(window.SpotifyIframeApi);
+      } else {
+        const prevReady = window.onSpotifyIframeApiReady;
+        window.onSpotifyIframeApiReady = (api: SpotifyIframeApi) => {
+          window.SpotifyIframeApi = api;
+          if (prevReady) prevReady(api);
+          initController(api);
+        };
+
+        const existingScript = document.getElementById("spotify-iframe-api-js");
+        if (!existingScript) {
+          const script = document.createElement("script");
+          script.id = "spotify-iframe-api-js";
+          script.src = "https://open.spotify.com/embed/iframe-api/v1";
+          script.async = true;
+          document.body.appendChild(script);
+        }
+      }
+    }
+
+    return () => {
+      isCancelled = true;
+      if (controllerInstance) {
+        try {
+          controllerInstance.destroy();
+        } catch {
+          // Ignore destroy errors
+        }
+      }
+    };
+  }, [spotifyKind, spotifyId, startSec, clipDuration]);
+
+  return (
+    <div className="rounded-xl overflow-hidden bg-zinc-950 h-[80px] w-full">
+      <div ref={mountRef} className="w-full h-[80px]" />
     </div>
   );
 }

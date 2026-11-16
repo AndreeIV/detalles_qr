@@ -1,3 +1,5 @@
+import { supabase } from "@/lib/supabase";
+
 export type ThemeId = "hotwheels" | "flores" | "aniversario";
 
 export interface GiftData {
@@ -9,6 +11,81 @@ export interface GiftData {
   imageUrl: string | null;
   startDate: string; // YYYY-MM-DD
   songTitle?: string;
+  musicUrl?: string;
+  musicStartSeconds?: number;
+  musicClipDuration?: number;
+  locationName?: string;
+}
+
+export type MusicProvider = "spotify" | "youtube" | "none";
+
+export interface ParsedMusicSource {
+  provider: MusicProvider;
+  id: string | null;
+  spotifyKind?: "track" | "album" | "playlist";
+}
+
+/**
+ * Extracts Spotify (track/album/playlist) or YouTube video ID from any shared URL.
+ */
+export function parseMusicUrl(rawUrl?: string): ParsedMusicSource {
+  if (!rawUrl || !rawUrl.trim()) {
+    return { provider: "none", id: null };
+  }
+
+  const url = rawUrl.trim();
+
+  // Match Spotify URLs: https://open.spotify.com/track/ID or /intl-es/track/ID or spotify:track:ID
+  const spotifyUriMatch = url.match(
+    /spotify:(track|album|playlist):([a-zA-Z0-9]+)/i,
+  );
+  if (spotifyUriMatch) {
+    return {
+      provider: "spotify",
+      spotifyKind: spotifyUriMatch[1].toLowerCase() as
+        | "track"
+        | "album"
+        | "playlist",
+      id: spotifyUriMatch[2],
+    };
+  }
+
+  const spotifyWebMatch = url.match(
+    /open\.spotify\.com\/(?:intl-[a-zA-Z-]+\/)?(?:embed\/)?(track|album|playlist)\/([a-zA-Z0-9]+)/i,
+  );
+  if (spotifyWebMatch) {
+    return {
+      provider: "spotify",
+      spotifyKind: spotifyWebMatch[1].toLowerCase() as
+        | "track"
+        | "album"
+        | "playlist",
+      id: spotifyWebMatch[2],
+    };
+  }
+
+  // Match YouTube URLs: youtube.com/watch?v=ID, youtu.be/ID, youtube.com/shorts/ID, youtube.com/embed/ID
+  const ytMatch = url.match(
+    /(?:youtube\.com\/(?:watch\?.*v=|embed\/|shorts\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/i,
+  );
+  if (ytMatch) {
+    return {
+      provider: "youtube",
+      id: ytMatch[1],
+    };
+  }
+
+  return { provider: "none", id: null };
+}
+
+/**
+ * Formats seconds (e.g. 75) into MM:SS ("01:15").
+ */
+export function formatSecondsToMmSs(totalSeconds = 0): string {
+  const safe = Math.max(0, Math.floor(totalSeconds));
+  const mins = Math.floor(safe / 60);
+  const secs = safe % 60;
+  return `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
 }
 
 export interface ThemeMeta {
@@ -220,6 +297,401 @@ export function getGiftFromStorage(slug: string): GiftData | null {
   }
 }
 
+function dataUrlToBlob(dataUrl: string): Blob | null {
+  try {
+    const [header, base64] = dataUrl.split(",");
+    if (!header || !base64) return null;
+    const mimeMatch = header.match(/:(.*?);/);
+    const mime = mimeMatch ? mimeMatch[1] : "image/jpeg";
+    const binary = window.atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return new Blob([bytes], { type: mime });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Saves the gift to Supabase (cloud DB + Storage) if configured in .env.local,
+ * while also caching in localStorage as a fallback.
+ */
+export async function saveGiftCloudOrLocal(
+  gift: GiftData,
+): Promise<{ savedToCloud: boolean }> {
+  saveGiftToStorage(gift);
+
+  if (!supabase) {
+    return { savedToCloud: false };
+  }
+
+  try {
+    let finalImageUrl = gift.imageUrl;
+
+    // Upload base64 photo to Supabase Storage bucket "gift-photos" if present
+    if (gift.imageUrl?.startsWith("data:image/")) {
+      const blob = dataUrlToBlob(gift.imageUrl);
+      if (blob) {
+        const filePath = `${gift.slug}-${Date.now()}.jpg`;
+        const { error: uploadErr } = await supabase.storage
+          .from("gift-photos")
+          .upload(filePath, blob, {
+            contentType: "image/jpeg",
+            upsert: true,
+          });
+
+        if (!uploadErr) {
+          const { data: pubData } = supabase.storage
+            .from("gift-photos")
+            .getPublicUrl(filePath);
+          if (pubData?.publicUrl) {
+            finalImageUrl = pubData.publicUrl;
+          }
+        }
+      }
+    }
+
+    const baseRow = {
+      slug: gift.slug,
+      theme: gift.theme,
+      sender_name: gift.senderName,
+      recipient_name: gift.recipientName,
+      message: gift.message,
+      image_url: finalImageUrl,
+      start_date: gift.startDate,
+      song_title: gift.songTitle || "",
+      music_url: gift.musicUrl || "",
+      music_start_seconds: gift.musicStartSeconds ?? 0,
+      music_clip_duration: gift.musicClipDuration ?? 30,
+    };
+
+    // Try upserting with location_name first
+    const { error } = await supabase.from("gifts").upsert(
+      {
+        ...baseRow,
+        location_name: gift.locationName?.trim() || "Lima, Perú",
+      },
+      { onConflict: "slug" },
+    );
+
+    if (error) {
+      // Fallback if the user hasn't run ALTER TABLE for location_name yet
+      const { error: retryErr } = await supabase
+        .from("gifts")
+        .upsert(baseRow, { onConflict: "slug" });
+      if (retryErr) {
+        return { savedToCloud: false };
+      }
+    }
+
+    return { savedToCloud: true };
+  } catch {
+    return { savedToCloud: false };
+  }
+}
+
+/**
+ * Fetches a gift by slug from Supabase first (so any phone scanning the QR sees it),
+ * falling back to localStorage if offline or not yet configured.
+ */
+export async function fetchGiftCloudOrLocal(
+  slug: string,
+): Promise<GiftData | null> {
+  if (supabase) {
+    try {
+      const { data, error } = await supabase
+        .from("gifts")
+        .select("*")
+        .eq("slug", slug)
+        .maybeSingle();
+
+      if (!error && data) {
+        return {
+          slug: data.slug as string,
+          theme: (data.theme as ThemeId) || "flores",
+          senderName: (data.sender_name as string) || "Mateo",
+          recipientName: (data.recipient_name as string) || "Valentina",
+          message: (data.message as string) || "",
+          imageUrl: (data.image_url as string | null) ?? null,
+          startDate: (data.start_date as string) || "2024-09-21",
+          songTitle: (data.song_title as string) || "",
+          musicUrl: (data.music_url as string) || "",
+          musicStartSeconds: Number(data.music_start_seconds ?? 0),
+          musicClipDuration: Number(data.music_clip_duration ?? 30),
+          locationName: (data.location_name as string) || "Lima, Perú",
+        };
+      }
+    } catch {
+      // Fallback to local storage
+    }
+  }
+
+  return getGiftFromStorage(slug);
+}
+
+export interface PublicCoupleEntry {
+  id: string;
+  theme: ThemeId;
+  senderName: string;
+  recipientName: string;
+  startDate: string;
+  createdAt: string;
+  city: string;
+  /** Map coordinates in percentage (x: 10..90, y: 12..88) */
+  mapX: number;
+  mapY: number;
+  isLiveFromDb?: boolean;
+}
+
+export const MAP_LOCATIONS = [
+  { city: "Lima, Perú", x: 34, y: 64 },
+  { city: "Arequipa, Perú", x: 39, y: 74 },
+  { city: "Trujillo, Perú", x: 30, y: 52 },
+  { city: "Cusco, Perú", x: 42, y: 67 },
+  { city: "Piura, Perú", x: 27, y: 42 },
+  { city: "Chiclayo, Perú", x: 28, y: 47 },
+  { city: "Huancayo, Perú", x: 37, y: 61 },
+  { city: "Ica, Perú", x: 35, y: 69 },
+  { city: "Cajamarca, Perú", x: 32, y: 49 },
+  { city: "Tacna, Perú", x: 41, y: 80 },
+  { city: "Puno, Perú", x: 44, y: 72 },
+  { city: "Chimbote, Perú", x: 31, y: 56 },
+  { city: "Iquitos, Perú", x: 39, y: 39 },
+  { city: "Pucallpa, Perú", x: 38, y: 53 },
+  { city: "Ayacucho, Perú", x: 39, y: 65 },
+  { city: "Bogotá, Colombia", x: 33, y: 30 },
+  { city: "Medellín, Colombia", x: 31, y: 26 },
+  { city: "Quito, Ecuador", x: 29, y: 36 },
+  { city: "Santiago, Chile", x: 39, y: 86 },
+  { city: "Buenos Aires, Argentina", x: 52, y: 84 },
+  { city: "Ciudad de México, MX", x: 18, y: 18 },
+  { city: "Madrid, España", x: 76, y: 22 },
+  { city: "Miami, EE. UU.", x: 26, y: 14 },
+];
+
+function hashSlugToIndex(slug: string, mod: number): number {
+  let hash = 0;
+  for (let i = 0; i < slug.length; i++) {
+    hash = (hash * 31 + slug.charCodeAt(i)) >>> 0;
+  }
+  return hash % mod;
+}
+
+/**
+ * Matches a chosen or detected city string (e.g. "Arequipa, Perú" or "Miraflores, Lima")
+ * to its map coordinates, with a slight deterministic jitter so pins in the same city don't overlap.
+ */
+export function resolveCoordinatesForLocation(
+  locationName: string,
+  slug: string,
+): { x: number; y: number } {
+  const normalized = (locationName || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+
+  const matched = MAP_LOCATIONS.find((loc) => {
+    const cityKey = loc.city
+      .split(",")[0]
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "");
+    return normalized.includes(cityKey);
+  });
+
+  const baseLoc =
+    matched || MAP_LOCATIONS[hashSlugToIndex(slug, MAP_LOCATIONS.length)];
+
+  const jitterX = (hashSlugToIndex(`${slug}-x`, 9) - 4) * 1.3;
+  const jitterY = (hashSlugToIndex(`${slug}-y`, 9) - 4) * 1.3;
+
+  return {
+    x: Math.min(88, Math.max(12, Math.round(baseLoc.x + jitterX))),
+    y: Math.min(88, Math.max(12, Math.round(baseLoc.y + jitterY))),
+  };
+}
+
+/**
+ * Detects the user's real city & country using browser Geolocation (if requested)
+ * or automatic IP reverse-geocoding (no permission popup required when useGps is false).
+ */
+export async function detectUserCity(useGps = false): Promise<string | null> {
+  if (typeof window === "undefined") return null;
+
+  const fetchCityFromApi = async (lat?: number, lng?: number) => {
+    const params = new URLSearchParams({ localityLanguage: "es" });
+    if (lat !== undefined && lng !== undefined) {
+      params.set("latitude", String(lat));
+      params.set("longitude", String(lng));
+    }
+    const res = await fetch(
+      `https://api.bigdatacloud.net/data/reverse-geocode-client?${params.toString()}`,
+    );
+    if (!res.ok) return null;
+    const data = (await res.json()) as {
+      city?: string;
+      locality?: string;
+      principalSubdivision?: string;
+      countryName?: string;
+    };
+    const city = data.city || data.locality || data.principalSubdivision || "";
+    const country = (data.countryName || "Perú").replace(/\s*\(.*?\)\s*/g, "");
+    if (!city) return null;
+    return `${city}, ${country}`;
+  };
+
+  if (useGps && "geolocation" in navigator) {
+    try {
+      const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(resolve, reject, {
+          timeout: 6000,
+        });
+      });
+      const fromGps = await fetchCityFromApi(
+        pos.coords.latitude,
+        pos.coords.longitude,
+      );
+      if (fromGps) return fromGps;
+    } catch {
+      // Fallback to IP-based detection if user declines GPS prompt
+    }
+  }
+
+  try {
+    return await fetchCityFromApi();
+  } catch {
+    return null;
+  }
+}
+
+const SHOWCASE_COUPLES: PublicCoupleEntry[] = [
+  {
+    id: "demo-1",
+    theme: "hotwheels",
+    senderName: "Mateo",
+    recipientName: "Valentina",
+    startDate: "2023-09-21",
+    createdAt: "2026-11-14T18:30:00Z",
+    city: "Miraflores, Lima",
+    mapX: 34,
+    mapY: 63,
+  },
+  {
+    id: "demo-2",
+    theme: "flores",
+    senderName: "Sebastián",
+    recipientName: "Camila",
+    startDate: "2024-02-14",
+    createdAt: "2026-11-14T20:15:00Z",
+    city: "Arequipa, Perú",
+    mapX: 40,
+    mapY: 74,
+  },
+  {
+    id: "demo-3",
+    theme: "aniversario",
+    senderName: "Diego",
+    recipientName: "Luciana",
+    startDate: "2022-07-10",
+    createdAt: "2026-11-15T01:10:00Z",
+    city: "Trujillo, Perú",
+    mapX: 29,
+    mapY: 51,
+  },
+  {
+    id: "demo-4",
+    theme: "hotwheels",
+    senderName: "Joaquín",
+    recipientName: "Ariana",
+    startDate: "2024-05-04",
+    createdAt: "2026-11-15T02:40:00Z",
+    city: "Cusco, Perú",
+    mapX: 44,
+    mapY: 67,
+  },
+  {
+    id: "demo-5",
+    theme: "flores",
+    senderName: "Rodrigo",
+    recipientName: "Fernanda",
+    startDate: "2023-11-18",
+    createdAt: "2026-11-15T03:12:00Z",
+    city: "Piura, Perú",
+    mapX: 26,
+    mapY: 42,
+  },
+  {
+    id: "demo-6",
+    theme: "aniversario",
+    senderName: "Álvaro",
+    recipientName: "Daniela",
+    startDate: "2021-12-03",
+    createdAt: "2026-11-15T03:50:00Z",
+    city: "Santiago, Chile",
+    mapX: 39,
+    mapY: 85,
+  },
+  {
+    id: "demo-7",
+    theme: "hotwheels",
+    senderName: "Nicolás",
+    recipientName: "Valeria",
+    startDate: "2024-08-12",
+    createdAt: "2026-11-15T04:10:00Z",
+    city: "Bogotá, Colombia",
+    mapX: 33,
+    mapY: 29,
+  },
+];
+
+/**
+ * Fetches public couple records from Supabase (only names, theme, start_date, and location_name
+ * so photos and dedication messages remain 100% private), combined with showcase pins.
+ */
+export async function fetchPublicCouples(): Promise<PublicCoupleEntry[]> {
+  const dbCouples: PublicCoupleEntry[] = [];
+
+  if (supabase) {
+    try {
+      const { data, error } = await supabase
+        .from("gifts")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(50);
+
+      if (!error && data) {
+        data.forEach((row, idx) => {
+          const slug = String(row.slug || `db-${idx}`);
+          const savedCity =
+            typeof row.location_name === "string" && row.location_name.trim()
+              ? row.location_name.trim()
+              : "Lima, Perú";
+          const coords = resolveCoordinatesForLocation(savedCity, slug);
+
+          dbCouples.push({
+            id: slug,
+            theme: (row.theme as ThemeId) || "aniversario",
+            senderName: String(row.sender_name || "Remitente"),
+            recipientName: String(row.recipient_name || "Destinatario"),
+            startDate: String(row.start_date || "2024-02-14"),
+            createdAt: String(row.created_at || new Date().toISOString()),
+            city: savedCity,
+            mapX: coords.x,
+            mapY: coords.y,
+            isLiveFromDb: true,
+          });
+        });
+      }
+    } catch {
+      // Ignore network errors and fall back to showcase list
+    }
+  }
+
+  return [...dbCouples, ...SHOWCASE_COUPLES];
+}
+
 export function createDemoGiftForSlug(slug: string): GiftData {
   const normalized = slug.toLowerCase();
   let theme: ThemeId = "flores";
@@ -247,5 +719,9 @@ export function createDemoGiftForSlug(slug: string): GiftData {
     imageUrl: null,
     startDate: "2024-02-14",
     songTitle: meta.defaultSong,
+    musicUrl: "",
+    musicStartSeconds: 45,
+    musicClipDuration: 30,
+    locationName: "Lima, Perú",
   };
 }

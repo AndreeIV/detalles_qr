@@ -8,9 +8,12 @@ import {
   CheckCircle2,
   Clock,
   Gift,
+  Globe2,
   Heart,
   ImagePlus,
+  Loader2,
   LockOpen,
+  MapPin,
   MessageSquareHeart,
   Music2,
   QrCode,
@@ -24,11 +27,17 @@ import {
 import Image from "next/image";
 import Link from "next/link";
 import { type ChangeEvent, useEffect, useRef, useState } from "react";
+import AmbientBackground from "@/components/AmbientBackground";
+import CouplesMapView from "@/components/CouplesMapView";
+import MusicFragmentSelector from "@/components/MusicFragmentSelector";
 import PaymentModal from "@/components/PaymentModal";
 import PhoneMockup from "@/components/PhoneMockup";
 import {
   calculateDaysTogether,
+  detectUserCity,
+  formatSecondsToMmSs,
   type GiftData,
+  MAP_LOCATIONS,
   THEME_LIST,
   THEMES,
   type ThemeId,
@@ -121,13 +130,16 @@ const WIZARD_STEPS: WizardStepMeta[] = [
 ];
 
 export default function BuilderDashboardPage() {
-  // Controls whether the user is on the Home Landing presentation or inside the Builder Wizard
-  const [viewMode, setViewMode] = useState<"home" | "builder">("home");
+  // Controls whether the user is on the Home Landing, Couples Map, or inside the Builder Wizard
+  const [viewMode, setViewMode] = useState<"home" | "builder" | "map">("home");
   const [currentStep, setCurrentStep] = useState(1);
 
   const [theme, setTheme] = useState<ThemeId>("hotwheels");
   const [senderName, setSenderName] = useState("Mateo");
   const [recipientName, setRecipientName] = useState("Valentina");
+  const [locationName, setLocationName] = useState("Lima, Perú");
+  const [hasCustomLocation, setHasCustomLocation] = useState(false);
+  const [isDetectingLocation, setIsDetectingLocation] = useState(false);
   const [message, setMessage] = useState(THEMES.hotwheels.defaultMessage);
   const [hasCustomMessage, setHasCustomMessage] = useState(false);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
@@ -135,6 +147,10 @@ export default function BuilderDashboardPage() {
   const [startDate, setStartDate] = useState("2024-09-21");
   const [songTitle, setSongTitle] = useState(THEMES.hotwheels.defaultSong);
   const [hasCustomSong, setHasCustomSong] = useState(false);
+  const [musicUrl, setMusicUrl] = useState("");
+  const [musicStartSeconds, setMusicStartSeconds] = useState(45);
+  const [musicClipDuration, setMusicClipDuration] = useState(30);
+  const [isPreviewPlaying, setIsPreviewPlaying] = useState(false);
 
   const [isPaymentOpen, setIsPaymentOpen] = useState(false);
   const [mobileTab, setMobileTab] = useState<"editor" | "preview">("editor");
@@ -146,7 +162,36 @@ export default function BuilderDashboardPage() {
 
   useEffect(() => {
     setNowTimestamp(Date.now());
+    // Silently detect city by IP on initial load if the user hasn't edited it
+    detectUserCity(false).then((detected) => {
+      if (detected) {
+        setLocationName((prev) => (prev === "Lima, Perú" ? detected : prev));
+      }
+    });
+    // Silently detect city by IP on initial load if the user hasn't edited it
+    detectUserCity(false).then((detected) => {
+      if (detected) {
+        setLocationName((prev) => (prev === "Lima, Perú" ? detected : prev));
+      }
+    });
   }, []);
+
+  const handleDetectMyLocation = async () => {
+    setIsDetectingLocation(true);
+    const detected = await detectUserCity(true);
+    if (detected) {
+      setLocationName(detected);
+      setHasCustomLocation(true);
+    }
+    setIsDetectingLocation(false);
+  };
+
+  // Automatically stop preview audio when opening payment modal or leaving the builder
+  useEffect(() => {
+    if (isPaymentOpen || viewMode !== "builder") {
+      setIsPreviewPlaying(false);
+    }
+  }, [isPaymentOpen, viewMode]);
 
   const handleSelectTheme = (nextTheme: ThemeId) => {
     setTheme(nextTheme);
@@ -196,6 +241,10 @@ export default function BuilderDashboardPage() {
     imageUrl,
     startDate,
     songTitle,
+    musicUrl,
+    musicStartSeconds,
+    musicClipDuration,
+    locationName,
   };
 
   const daysTogether = calculateDaysTogether(startDate, nowTimestamp);
@@ -205,15 +254,20 @@ export default function BuilderDashboardPage() {
   const progressPercent = Math.round((currentStep / totalSteps) * 100);
 
   const goNext = () => {
+    setIsPreviewPlaying(false);
     setCurrentStep((prev) => Math.min(totalSteps, prev + 1));
   };
 
   const goPrev = () => {
+    setIsPreviewPlaying(false);
     setCurrentStep((prev) => Math.max(1, prev - 1));
   };
 
   return (
-    <div className="min-h-screen flex flex-col bg-zinc-950 text-zinc-100">
+    <div className="relative min-h-screen flex flex-col bg-zinc-950 text-zinc-100">
+      {/* Animated Ambient Background with Aurora Orbs & Floating Theme Particles */}
+      <AmbientBackground theme={theme} />
+
       {/* Top SaaS Navbar */}
       <header className="sticky top-0 z-30 border-b border-zinc-800/80 bg-zinc-950/85 backdrop-blur-xl">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
@@ -242,16 +296,33 @@ export default function BuilderDashboardPage() {
             </button>
           </div>
 
-          <div className="flex items-center gap-2.5">
+          <div className="flex items-center gap-2 sm:gap-2.5">
+            {/* Global Couples Map Button (Always accessible in Navbar!) */}
+            <button
+              type="button"
+              onClick={() =>
+                setViewMode((prev) => (prev === "map" ? "home" : "map"))
+              }
+              className={`inline-flex items-center gap-1.5 px-3 sm:px-3.5 py-2 rounded-xl border text-xs font-semibold transition-all cursor-pointer ${
+                viewMode === "map"
+                  ? "bg-amber-400/15 border-amber-400/50 text-amber-300 shadow-lg shadow-amber-500/10"
+                  : "bg-zinc-900/90 hover:bg-zinc-800 border-zinc-800 text-zinc-200"
+              }`}
+            >
+              <Globe2 className="w-3.5 h-3.5 text-amber-400" />
+              <span>Mapa de Parejas</span>
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+            </button>
+
             {viewMode === "builder" ? (
               <>
                 <button
                   type="button"
                   onClick={() => setViewMode("home")}
-                  className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-xs font-medium text-zinc-300 transition-colors cursor-pointer"
+                  className="hidden sm:inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-xs font-medium text-zinc-300 transition-colors cursor-pointer"
                 >
                   <ArrowLeft className="w-3.5 h-3.5" />
-                  <span>Volver al Inicio</span>
+                  <span>Inicio</span>
                 </button>
 
                 <button
@@ -267,7 +338,7 @@ export default function BuilderDashboardPage() {
               <>
                 <Link
                   href="/d/demo-hotwheels"
-                  className="hidden sm:inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-xs font-medium text-zinc-300 transition-colors"
+                  className="hidden md:inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-xs font-medium text-zinc-300 transition-colors"
                 >
                   <Sparkles className="w-3.5 h-3.5 text-amber-400" />
                   <span>Ver Demo Real</span>
@@ -276,9 +347,12 @@ export default function BuilderDashboardPage() {
                 <button
                   type="button"
                   onClick={() => handleStartBuilding()}
-                  className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-bold bg-gradient-to-r from-amber-400 via-orange-500 to-rose-500 text-zinc-950 shadow-lg shadow-orange-500/20 hover:scale-105 active:scale-95 transition-all cursor-pointer"
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-bold bg-gradient-to-r from-amber-400 via-orange-500 to-rose-500 text-zinc-950 shadow-lg shadow-orange-500/20 hover:scale-105 active:scale-95 transition-all cursor-pointer shimmer-btn"
                 >
-                  <Sparkles className="w-4 h-4" />
+                  <Sparkles
+                    className="w-4 h-4 animate-spin"
+                    style={{ animationDuration: "6s" }}
+                  />
                   <span>Crear Detalle</span>
                 </button>
               </>
@@ -288,10 +362,14 @@ export default function BuilderDashboardPage() {
       </header>
 
       {/* ========================================================= */}
-      {/* VIEW 1: HOME / LANDING PRESENTATION                       */}
+      {/* VIEW 0: GLOBAL COUPLES MAP (LIVE FROM SUPABASE)           */}
       {/* ========================================================= */}
-      {viewMode === "home" ? (
-        <main className="flex-1 animate-in fade-in duration-500">
+      {viewMode === "map" ? (
+        <CouplesMapView
+          onStartBuilding={(initialTheme) => handleStartBuilding(initialTheme)}
+        />
+      ) : viewMode === "home" ? (
+        <main className="relative z-10 flex-1 animate-in fade-in duration-500">
           {/* HERO SECTION */}
           <section className="relative overflow-hidden py-10 sm:py-16 lg:py-20 border-b border-zinc-900">
             {/* Ambient background glows */}
@@ -329,7 +407,7 @@ export default function BuilderDashboardPage() {
                     <button
                       type="button"
                       onClick={() => handleStartBuilding()}
-                      className="w-full sm:w-auto inline-flex items-center justify-center gap-2.5 px-8 py-4 rounded-2xl font-bold text-base bg-gradient-to-r from-amber-400 via-orange-500 to-rose-500 text-zinc-950 shadow-xl shadow-orange-500/25 hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer"
+                      className="w-full sm:w-auto inline-flex items-center justify-center gap-2.5 px-8 py-4 rounded-2xl font-bold text-base bg-gradient-to-r from-amber-400 via-orange-500 to-rose-500 text-zinc-950 shadow-xl shadow-orange-500/25 hover:scale-105 active:scale-95 transition-all cursor-pointer animate-cta-hop shimmer-btn"
                     >
                       <Gift className="w-5 h-5 stroke-[2.5]" />
                       <span>Crear Detalle Ahora</span>
@@ -540,7 +618,7 @@ export default function BuilderDashboardPage() {
                 <button
                   type="button"
                   onClick={() => handleStartBuilding()}
-                  className="inline-flex items-center gap-2.5 px-8 py-4 rounded-2xl font-bold text-base bg-gradient-to-r from-amber-400 via-orange-500 to-rose-500 text-zinc-950 shadow-xl shadow-orange-500/25 hover:scale-105 transition-all cursor-pointer"
+                  className="inline-flex items-center gap-2.5 px-8 py-4 rounded-2xl font-bold text-base bg-gradient-to-r from-amber-400 via-orange-500 to-rose-500 text-zinc-950 shadow-xl shadow-orange-500/25 hover:scale-105 transition-all cursor-pointer animate-cta-hop shimmer-btn"
                 >
                   <Sparkles className="w-5 h-5" />
                   <span>Crear Detalle</span>
@@ -585,7 +663,7 @@ export default function BuilderDashboardPage() {
           </div>
 
           {/* Main Split Workspace */}
-          <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 lg:py-10 animate-in fade-in duration-300">
+          <main className="relative z-10 flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 lg:py-10 animate-in fade-in duration-300">
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-10 items-start">
               {/* LEFT COLUMN: Dynamic Multi-Step Wizard Window */}
               <section
@@ -619,7 +697,10 @@ export default function BuilderDashboardPage() {
                           <button
                             key={step.id}
                             type="button"
-                            onClick={() => setCurrentStep(step.id)}
+                            onClick={() => {
+                              setIsPreviewPlaying(false);
+                              setCurrentStep(step.id);
+                            }}
                             className={`group flex flex-col items-start gap-1.5 p-2 rounded-xl border text-left transition-all cursor-pointer ${
                               isActive
                                 ? "bg-zinc-900 border-amber-400/60 shadow-sm"
@@ -785,13 +866,102 @@ export default function BuilderDashboardPage() {
                             </div>
                           </div>
 
+                          <div className="rounded-2xl bg-zinc-950/70 border border-zinc-800/90 p-4 space-y-3">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <label
+                                htmlFor="locationNameInput"
+                                className="text-xs font-semibold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5"
+                              >
+                                <MapPin className="w-3.5 h-3.5 text-emerald-400" />
+                                <span>
+                                  ¿Desde qué ciudad o país se envía? (Para el
+                                  Mapa de Parejas)
+                                </span>
+                              </label>
+
+                              <button
+                                type="button"
+                                disabled={isDetectingLocation}
+                                onClick={handleDetectMyLocation}
+                                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 text-xs font-semibold text-emerald-300 transition-colors cursor-pointer disabled:opacity-60"
+                              >
+                                {isDetectingLocation ? (
+                                  <>
+                                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                    <span>Detectando...</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <MapPin className="w-3.5 h-3.5" />
+                                    <span>Detectar mi ubicación</span>
+                                  </>
+                                )}
+                              </button>
+                            </div>
+
+                            <input
+                              id="locationNameInput"
+                              type="text"
+                              list="cities-datalist"
+                              maxLength={50}
+                              value={locationName}
+                              onChange={(e) => {
+                                setLocationName(e.target.value);
+                                setHasCustomLocation(true);
+                              }}
+                              placeholder="Ej. Lima, Perú o Arequipa, Perú"
+                              className="w-full rounded-xl bg-zinc-900 border border-zinc-800 px-4 py-2.5 text-sm font-medium text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-amber-400/50 transition-all"
+                            />
+                            <datalist id="cities-datalist">
+                              {MAP_LOCATIONS.map((loc) => (
+                                <option key={loc.city} value={loc.city} />
+                              ))}
+                            </datalist>
+
+                            {/* Quick Pick City Pills */}
+                            <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                              <span className="text-[11px] text-zinc-500 mr-1">
+                                Rápido:
+                              </span>
+                              {[
+                                "Lima, Perú",
+                                "Arequipa, Perú",
+                                "Trujillo, Perú",
+                                "Cusco, Perú",
+                                "Piura, Perú",
+                              ].map((cityOption) => (
+                                <button
+                                  key={cityOption}
+                                  type="button"
+                                  onClick={() => {
+                                    setLocationName(cityOption);
+                                    setHasCustomLocation(true);
+                                  }}
+                                  className={`px-2.5 py-1 rounded-lg text-[11px] font-medium transition-colors cursor-pointer ${
+                                    locationName === cityOption
+                                      ? "bg-amber-400 text-zinc-950 font-bold"
+                                      : "bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-400"
+                                  }`}
+                                >
+                                  {cityOption.split(",")[0]}
+                                </button>
+                              ))}
+                              {!hasCustomLocation && (
+                                <span className="text-[10px] text-emerald-400 ml-auto">
+                                  ✓ Detectada automáticamente
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
                           <div className="rounded-2xl bg-amber-500/5 border border-amber-500/20 px-4 py-3 flex items-center justify-between text-xs text-amber-200/90">
                             <span>
                               💡 Mira el celular a la derecha: ya dice{" "}
                               <strong>
                                 {senderName.trim() || "Remitente"} &amp;{" "}
                                 {recipientName.trim() || "Destinatario"}
-                              </strong>
+                              </strong>{" "}
+                              ({locationName.trim() || "Lima, Perú"})
                             </span>
                           </div>
                         </div>
@@ -850,95 +1020,95 @@ export default function BuilderDashboardPage() {
                       {/* STEP 4: Local Photo, Start Date & Song */}
                       {currentStep === 4 && (
                         <div className="space-y-5 pt-1">
-                          {/* Local Image Picker */}
-                          <div className="space-y-2">
-                            <label
-                              htmlFor="photoUpload"
-                              className="text-xs font-semibold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5"
-                            >
-                              <ImagePlus className="w-3.5 h-3.5 text-sky-400" />
-                              <span>Fotografía Principal</span>
-                            </label>
-
-                            <input
-                              ref={fileInputRef}
-                              id="photoUpload"
-                              type="file"
-                              accept="image/*"
-                              onChange={handleImageChange}
-                              className="sr-only"
-                            />
-
-                            {!imageUrl ? (
-                              <button
-                                type="button"
-                                onClick={() => fileInputRef.current?.click()}
-                                className="w-full rounded-2xl border-2 border-dashed border-zinc-800 hover:border-amber-400/50 bg-zinc-950/70 hover:bg-zinc-950 p-5 flex flex-col items-center justify-center gap-2 transition-all group cursor-pointer"
+                          {/* Photo & Date Row */}
+                          <div className="grid grid-cols-1 sm:grid-cols-12 gap-4 items-start">
+                            {/* Local Image Picker */}
+                            <div className="sm:col-span-7 space-y-1.5">
+                              <label
+                                htmlFor="photoUpload"
+                                className="text-xs font-semibold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5"
                               >
-                                <div className="w-11 h-11 rounded-xl bg-zinc-900 border border-zinc-800 group-hover:border-amber-400/40 flex items-center justify-center text-zinc-400 group-hover:text-amber-300 transition-colors">
-                                  <ImagePlus className="w-5 h-5" />
-                                </div>
-                                <div className="text-center">
-                                  <p className="text-sm font-semibold text-zinc-200">
-                                    Subir foto desde tu celular o PC
-                                  </p>
-                                  <p className="text-xs text-zinc-500 mt-0.5">
-                                    JPG, PNG o WEBP • Se encuadra
-                                    automáticamente en la tarjeta
-                                  </p>
-                                </div>
-                              </button>
-                            ) : (
-                              <div className="rounded-2xl border border-zinc-800 bg-zinc-950 p-3.5 flex items-center justify-between gap-3">
-                                <div className="flex items-center gap-3.5 min-w-0">
-                                  <div className="relative w-16 h-16 rounded-xl overflow-hidden shrink-0 border border-zinc-700">
-                                    <Image
-                                      src={imageUrl}
-                                      alt="Vista previa miniatura"
-                                      fill
-                                      unoptimized
-                                      className="object-cover"
-                                    />
-                                  </div>
-                                  <div className="min-w-0">
-                                    <p className="text-sm font-semibold text-zinc-100 truncate">
-                                      {imageFileName ||
-                                        "Foto personalizada cargada"}
-                                    </p>
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        fileInputRef.current?.click()
-                                      }
-                                      className="text-xs text-amber-400 hover:underline mt-1 cursor-pointer"
-                                    >
-                                      Cambiar fotografía
-                                    </button>
-                                  </div>
-                                </div>
+                                <ImagePlus className="w-3.5 h-3.5 text-sky-400" />
+                                <span>Fotografía Principal</span>
+                              </label>
 
+                              <input
+                                ref={fileInputRef}
+                                id="photoUpload"
+                                type="file"
+                                accept="image/*"
+                                onChange={handleImageChange}
+                                className="sr-only"
+                              />
+
+                              {!imageUrl ? (
                                 <button
                                   type="button"
-                                  onClick={handleRemoveImage}
-                                  aria-label="Quitar fotografía"
-                                  className="p-2.5 rounded-xl bg-zinc-900 hover:bg-red-500/15 text-zinc-400 hover:text-red-400 transition-colors cursor-pointer"
+                                  onClick={() => fileInputRef.current?.click()}
+                                  className="w-full rounded-2xl border-2 border-dashed border-zinc-800 hover:border-amber-400/50 bg-zinc-950/70 hover:bg-zinc-950 p-4 flex items-center gap-3.5 transition-all group cursor-pointer text-left"
                                 >
-                                  <Trash2 className="w-4 h-4" />
+                                  <div className="w-11 h-11 rounded-xl bg-zinc-900 border border-zinc-800 group-hover:border-amber-400/40 flex items-center justify-center text-zinc-400 group-hover:text-amber-300 shrink-0 transition-colors">
+                                    <ImagePlus className="w-5 h-5" />
+                                  </div>
+                                  <div>
+                                    <p className="text-xs sm:text-sm font-semibold text-zinc-200">
+                                      Subir foto desde tu celular o PC
+                                    </p>
+                                    <p className="text-[11px] text-zinc-500 mt-0.5">
+                                      JPG, PNG o WEBP • Encuadre automático
+                                    </p>
+                                  </div>
                                 </button>
-                              </div>
-                            )}
-                          </div>
+                              ) : (
+                                <div className="rounded-2xl border border-zinc-800 bg-zinc-950 p-3 flex items-center justify-between gap-3">
+                                  <div className="flex items-center gap-3 min-w-0">
+                                    <div className="relative w-12 h-12 rounded-xl overflow-hidden shrink-0 border border-zinc-700">
+                                      <Image
+                                        src={imageUrl}
+                                        alt="Vista previa miniatura"
+                                        fill
+                                        unoptimized
+                                        className="object-cover"
+                                      />
+                                    </div>
+                                    <div className="min-w-0">
+                                      <p className="text-xs font-semibold text-zinc-100 truncate">
+                                        {imageFileName ||
+                                          "Foto personalizada cargada"}
+                                      </p>
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          fileInputRef.current?.click()
+                                        }
+                                        className="text-[11px] text-amber-400 hover:underline mt-0.5 cursor-pointer"
+                                      >
+                                        Cambiar fotografía
+                                      </button>
+                                    </div>
+                                  </div>
 
-                          {/* Start Date & Song Row */}
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                            <div className="space-y-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={handleRemoveImage}
+                                    aria-label="Quitar fotografía"
+                                    className="p-2 rounded-xl bg-zinc-900 hover:bg-red-500/15 text-zinc-400 hover:text-red-400 transition-colors cursor-pointer"
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Start Date */}
+                            <div className="sm:col-span-5 space-y-1.5">
                               <div className="flex items-center justify-between">
                                 <label
                                   htmlFor="startDate"
-                                  className="text-xs font-medium text-zinc-300 flex items-center gap-1.5"
+                                  className="text-xs font-semibold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5"
                                 >
                                   <Calendar className="w-3.5 h-3.5 text-emerald-400" />
-                                  <span>Fecha de inicio juntos</span>
+                                  <span>Fecha de inicio</span>
                                 </label>
                                 <span className="text-xs font-bold text-emerald-400 tabular-nums">
                                   {daysTogether} días
@@ -949,32 +1119,31 @@ export default function BuilderDashboardPage() {
                                 type="date"
                                 value={startDate}
                                 onChange={(e) => setStartDate(e.target.value)}
-                                className="w-full rounded-xl bg-zinc-950 border border-zinc-800 px-3.5 py-2.5 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-amber-400/50 focus:border-amber-400/50 transition-all [color-scheme:dark]"
+                                className="w-full rounded-2xl bg-zinc-950 border border-zinc-800 px-3.5 py-3.5 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-amber-400/50 focus:border-amber-400/50 transition-all [color-scheme:dark]"
                               />
-                            </div>
-
-                            <div className="space-y-1.5">
-                              <label
-                                htmlFor="songTitle"
-                                className="text-xs font-medium text-zinc-300 flex items-center gap-1.5"
-                              >
-                                <Music2 className="w-3.5 h-3.5 text-purple-400" />
-                                <span>Canción especial (Simulada)</span>
-                              </label>
-                              <input
-                                id="songTitle"
-                                type="text"
-                                maxLength={60}
-                                value={songTitle}
-                                onChange={(e) => {
-                                  setSongTitle(e.target.value);
-                                  setHasCustomSong(true);
-                                }}
-                                placeholder="Nombre de su canción..."
-                                className="w-full rounded-xl bg-zinc-950 border border-zinc-800 px-3.5 py-2.5 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-amber-400/50 focus:border-amber-400/50 transition-all"
-                              />
+                              <p className="text-[11px] text-zinc-500">
+                                Calcula los días juntos automáticamente.
+                              </p>
                             </div>
                           </div>
+
+                          {/* Instagram-Stories-Style Spotify / YouTube Fragment Selector */}
+                          <MusicFragmentSelector
+                            theme={theme}
+                            songTitle={songTitle}
+                            onSongTitleChange={(next) => {
+                              setSongTitle(next);
+                              setHasCustomSong(true);
+                            }}
+                            musicUrl={musicUrl}
+                            onMusicUrlChange={setMusicUrl}
+                            startSeconds={musicStartSeconds}
+                            onStartSecondsChange={setMusicStartSeconds}
+                            clipDuration={musicClipDuration}
+                            onClipDurationChange={setMusicClipDuration}
+                            isPreviewPlaying={isPreviewPlaying}
+                            onPreviewPlayingChange={setIsPreviewPlaying}
+                          />
                         </div>
                       )}
 
@@ -1025,6 +1194,18 @@ export default function BuilderDashboardPage() {
                               </div>
                             </div>
 
+                            <div className="rounded-xl bg-zinc-900/70 p-3 border border-zinc-800/60 flex items-center justify-between text-xs">
+                              <div className="flex items-center gap-2 min-w-0">
+                                <Music2 className="w-4 h-4 text-purple-400 shrink-0" />
+                                <span className="text-zinc-200 font-medium truncate">
+                                  {songTitle || activeThemeMeta.defaultSong}
+                                </span>
+                              </div>
+                              <span className="font-mono text-amber-300 shrink-0 ml-2">
+                                Desde {formatSecondsToMmSs(musicStartSeconds)}
+                              </span>
+                            </div>
+
                             <div className="flex items-center justify-between pt-1">
                               <div className="flex items-center gap-2 text-xs text-emerald-400">
                                 <CheckCircle2 className="w-4 h-4 shrink-0" />
@@ -1042,7 +1223,7 @@ export default function BuilderDashboardPage() {
                           <button
                             type="button"
                             onClick={() => setIsPaymentOpen(true)}
-                            className="w-full py-4 px-6 rounded-2xl font-bold text-base bg-gradient-to-r from-amber-400 via-orange-500 to-rose-500 text-zinc-950 shadow-xl shadow-orange-500/25 hover:brightness-105 active:scale-[0.99] transition-all flex items-center justify-center gap-2.5 cursor-pointer"
+                            className="w-full py-4 px-6 rounded-2xl font-bold text-base bg-gradient-to-r from-amber-400 via-orange-500 to-rose-500 text-zinc-950 shadow-xl shadow-orange-500/25 hover:brightness-105 active:scale-[0.99] transition-all flex items-center justify-center gap-2.5 cursor-pointer animate-cta-hop shimmer-btn"
                           >
                             <QrCode className="w-5 h-5 stroke-[2.5]" />
                             <span>
@@ -1099,7 +1280,11 @@ export default function BuilderDashboardPage() {
                   mobileTab === "editor" ? "hidden lg:block" : "block"
                 }`}
               >
-                <PhoneMockup gift={currentGift} />
+                <PhoneMockup
+                  gift={currentGift}
+                  isPlaying={isPreviewPlaying}
+                  onPlayingChange={setIsPreviewPlaying}
+                />
               </aside>
             </div>
           </main>

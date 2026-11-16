@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
-import { type GiftData, saveGiftToStorage, THEMES } from "@/types/gift";
+import { type GiftData, saveGiftCloudOrLocal, THEMES } from "@/types/gift";
 
 interface PaymentModalProps {
   isOpen: boolean;
@@ -37,6 +37,7 @@ export default function PaymentModal({
   const [copiedLink, setCopiedLink] = useState(false);
   const [isConfirming, setIsConfirming] = useState(false);
   const [confirmedSlug, setConfirmedSlug] = useState<string | null>(null);
+  const [savedInCloud, setSavedInCloud] = useState(false);
 
   if (!isOpen) return null;
 
@@ -64,20 +65,20 @@ export default function PaymentModal({
 
     const toSlug = cleanPart(gift.recipientName, "especial");
     const fromSlug = cleanPart(gift.senderName, "detalle");
-    return `${gift.theme}-${fromSlug}-para-${toSlug}`;
+    const uniqueCode = Math.random().toString(36).substring(2, 6);
+    return `${gift.theme}-${fromSlug}-para-${toSlug}-${uniqueCode}`;
   };
 
-  const handleConfirmPayment = () => {
+  const handleConfirmPayment = async () => {
     setIsConfirming(true);
-    setTimeout(() => {
-      const finalSlug = buildSlug();
-      saveGiftToStorage({
-        ...gift,
-        slug: finalSlug,
-      });
-      setIsConfirming(false);
-      setConfirmedSlug(finalSlug);
-    }, 900);
+    const finalSlug = buildSlug();
+    const { savedToCloud } = await saveGiftCloudOrLocal({
+      ...gift,
+      slug: finalSlug,
+    });
+    setSavedInCloud(savedToCloud);
+    setIsConfirming(false);
+    setConfirmedSlug(finalSlug);
   };
 
   const sharePath = confirmedSlug ? `/d/${confirmedSlug}` : "";
@@ -269,6 +270,11 @@ export default function PaymentModal({
                   {gift.recipientName.trim() || "tu persona favorita"}
                 </strong>
               </p>
+              {savedInCloud && (
+                <p className="text-[11px] font-semibold text-emerald-400 pt-0.5">
+                  ☁️ Guardado en Supabase • Disponible en cualquier celular
+                </p>
+              )}
             </div>
 
             {/* Generated Gift QR Box */}

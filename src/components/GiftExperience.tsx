@@ -3,13 +3,21 @@
 import { Gift, LockOpen, RotateCcw, Sparkles } from "lucide-react";
 import { useEffect, useState } from "react";
 import ThemeCard from "@/components/ThemeCard";
-import { calculateDaysTogether, type GiftData, THEMES } from "@/types/gift";
+import {
+  calculateDaysTogether,
+  type GiftData,
+  parseMusicUrl,
+  THEMES,
+} from "@/types/gift";
 
 interface GiftExperienceProps {
   gift: GiftData;
   /** Controlled open state (used by PhoneMockup preview tabs) */
   isOpen?: boolean;
   onOpenChange?: (open: boolean) => void;
+  /** Controlled audio playback state (used in Builder so audio stops when changing steps) */
+  isPlaying?: boolean;
+  onPlayingChange?: (playing: boolean) => void;
   /** Compact layout when rendered inside the iPhone Mockup */
   inMockup?: boolean;
 }
@@ -55,10 +63,13 @@ export default function GiftExperience({
   gift,
   isOpen: controlledIsOpen,
   onOpenChange,
+  isPlaying: controlledIsPlaying,
+  onPlayingChange,
   inMockup = false,
 }: GiftExperienceProps) {
   const [internalOpen, setInternalOpen] = useState(false);
-  const [isPlaying, setIsPlaying] = useState(true);
+  // Default to false inside the Builder mockup so music only plays when explicitly tested
+  const [internalPlaying, setInternalPlaying] = useState(!inMockup);
   const [nowTimestamp, setNowTimestamp] = useState<number | undefined>(
     undefined,
   );
@@ -78,9 +89,23 @@ export default function GiftExperience({
     }
   };
 
+  const playing =
+    controlledIsPlaying !== undefined ? controlledIsPlaying : internalPlaying;
+
+  const setPlaying = (next: boolean) => {
+    if (onPlayingChange) {
+      onPlayingChange(next);
+    } else {
+      setInternalPlaying(next);
+    }
+  };
+
   const handleUnlock = () => {
-    playUnlockChime();
-    setIsPlaying(true);
+    const parsedMusic = parseMusicUrl(gift.musicUrl);
+    if (parsedMusic.provider === "none") {
+      playUnlockChime();
+    }
+    setPlaying(true);
     setUnlocked(true);
   };
 
@@ -173,7 +198,7 @@ export default function GiftExperience({
         <button
           type="button"
           onClick={handleUnlock}
-          className={`relative z-10 group inline-flex items-center gap-2.5 px-7 py-3.5 rounded-full font-bold text-sm bg-gradient-to-r shadow-xl transition-all duration-300 hover:scale-105 active:scale-95 cursor-pointer ${splashAccent.btn}`}
+          className={`relative z-10 group inline-flex items-center gap-2.5 px-7 py-3.5 rounded-full font-bold text-sm bg-gradient-to-r shadow-xl transition-all duration-300 hover:scale-105 active:scale-95 cursor-pointer animate-cta-hop shimmer-btn ${splashAccent.btn}`}
         >
           <LockOpen className="w-4 h-4 transition-transform group-hover:-rotate-12" />
           <span>Toca para abrir</span>
@@ -196,8 +221,8 @@ export default function GiftExperience({
         <ThemeCard
           gift={gift}
           daysTogether={daysTogether}
-          isPlaying={isPlaying}
-          onTogglePlay={() => setIsPlaying((prev) => !prev)}
+          isPlaying={playing}
+          onTogglePlay={() => setPlaying(!playing)}
           compact={inMockup}
         />
 
@@ -205,7 +230,10 @@ export default function GiftExperience({
         <div className="mt-4 flex items-center justify-center">
           <button
             type="button"
-            onClick={() => setUnlocked(false)}
+            onClick={() => {
+              setPlaying(false);
+              setUnlocked(false);
+            }}
             className="inline-flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-300 transition-colors py-1.5 px-3 rounded-full hover:bg-zinc-900 cursor-pointer"
           >
             <RotateCcw className="w-3.5 h-3.5" />

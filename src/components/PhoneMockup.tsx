@@ -7,9 +7,15 @@ import type { GiftData } from "@/types/gift";
 
 interface PhoneMockupProps {
   gift: GiftData;
+  isPlaying?: boolean;
+  onPlayingChange?: (playing: boolean) => void;
 }
 
-export default function PhoneMockup({ gift }: PhoneMockupProps) {
+export default function PhoneMockup({
+  gift,
+  isPlaying,
+  onPlayingChange,
+}: PhoneMockupProps) {
   // Default to true in the builder so changes to photo/message are immediately visible,
   // while allowing 1-click toggle to inspect the Splash Screen!
   const [previewOpened, setPreviewOpened] = useState(true);
@@ -39,7 +45,10 @@ export default function PhoneMockup({ gift }: PhoneMockupProps) {
         </button>
         <button
           type="button"
-          onClick={() => setPreviewOpened(false)}
+          onClick={() => {
+            setPreviewOpened(false);
+            if (onPlayingChange) onPlayingChange(false);
+          }}
           className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-medium transition-all cursor-pointer ${
             !previewOpened
               ? "bg-zinc-100 text-zinc-950 shadow"
@@ -51,8 +60,8 @@ export default function PhoneMockup({ gift }: PhoneMockupProps) {
         </button>
       </div>
 
-      {/* Outer Ambient Glow + iPhone Frame */}
-      <div className="relative">
+      {/* Outer Ambient Glow + Levitating iPhone Frame */}
+      <div className="relative animate-float-slow">
         <div
           className={`absolute -inset-6 rounded-[64px] bg-gradient-to-tr ${glowColor} blur-2xl pointer-events-none transition-colors duration-500`}
         />
@@ -89,6 +98,8 @@ export default function PhoneMockup({ gift }: PhoneMockupProps) {
                 gift={gift}
                 isOpen={previewOpened}
                 onOpenChange={setPreviewOpened}
+                isPlaying={isPlaying}
+                onPlayingChange={onPlayingChange}
                 inMockup
               />
             </div>
