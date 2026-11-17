@@ -3,6 +3,7 @@
 import { Gift, LockOpen, RotateCcw, Sparkles } from "lucide-react";
 import { useEffect, useState } from "react";
 import ThemeCard from "@/components/ThemeCard";
+import { ambientAudio } from "@/lib/ambientAudio";
 import {
   calculateDaysTogether,
   type GiftData,
@@ -91,6 +92,15 @@ export default function GiftExperience({
 
   const playing =
     controlledIsPlaying !== undefined ? controlledIsPlaying : internalPlaying;
+
+  // On the standalone recipient page (/d/[slug]), pause global ambient music while the card's song plays
+  useEffect(() => {
+    if (inMockup) return;
+    ambientAudio.setExternalAudioActive(unlocked && playing);
+    return () => {
+      ambientAudio.setExternalAudioActive(false);
+    };
+  }, [inMockup, unlocked, playing]);
 
   const setPlaying = (next: boolean) => {
     if (onPlayingChange) {

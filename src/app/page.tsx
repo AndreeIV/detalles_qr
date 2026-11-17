@@ -32,6 +32,7 @@ import CouplesMapView from "@/components/CouplesMapView";
 import MusicFragmentSelector from "@/components/MusicFragmentSelector";
 import PaymentModal from "@/components/PaymentModal";
 import PhoneMockup from "@/components/PhoneMockup";
+import { ambientAudio } from "@/lib/ambientAudio";
 import {
   calculateDaysTogether,
   detectUserCity,
@@ -193,6 +194,14 @@ export default function BuilderDashboardPage() {
     }
   }, [isPaymentOpen, viewMode]);
 
+  // Pause global ambient background music whenever the song fragment preview is playing
+  useEffect(() => {
+    ambientAudio.setExternalAudioActive(isPreviewPlaying);
+    return () => {
+      ambientAudio.setExternalAudioActive(false);
+    };
+  }, [isPreviewPlaying]);
+
   const handleSelectTheme = (nextTheme: ThemeId) => {
     setTheme(nextTheme);
     if (!hasCustomMessage) {
@@ -207,6 +216,7 @@ export default function BuilderDashboardPage() {
     if (initialTheme) {
       handleSelectTheme(initialTheme);
     }
+    ambientAudio.playWhooshSound();
     setCurrentStep(startAtStep);
     setViewMode("builder");
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -255,11 +265,13 @@ export default function BuilderDashboardPage() {
 
   const goNext = () => {
     setIsPreviewPlaying(false);
+    ambientAudio.playWhooshSound();
     setCurrentStep((prev) => Math.min(totalSteps, prev + 1));
   };
 
   const goPrev = () => {
     setIsPreviewPlaying(false);
+    ambientAudio.playWhooshSound();
     setCurrentStep((prev) => Math.max(1, prev - 1));
   };
 
@@ -699,6 +711,7 @@ export default function BuilderDashboardPage() {
                             type="button"
                             onClick={() => {
                               setIsPreviewPlaying(false);
+                              ambientAudio.playWhooshSound();
                               setCurrentStep(step.id);
                             }}
                             className={`group flex flex-col items-start gap-1.5 p-2 rounded-xl border text-left transition-all cursor-pointer ${
