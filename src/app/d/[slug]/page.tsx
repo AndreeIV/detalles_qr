@@ -19,9 +19,9 @@ function RecipientExperienceContent() {
   const params = useParams<{ slug: string }>();
   const rawSlug = typeof params.slug === "string" ? params.slug : "especial";
   const slug = decodeURIComponent(rawSlug);
+  const isDemoRoute = slug.toLowerCase().startsWith("demo");
 
   const [gift, setGift] = useState<GiftData>(() => createDemoGiftForSlug(slug));
-  const [isStoredGift, setIsStoredGift] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
@@ -30,7 +30,6 @@ function RecipientExperienceContent() {
     const localSaved = getGiftFromStorage(slug);
     if (localSaved) {
       setGift(localSaved);
-      setIsStoredGift(true);
     }
 
     // 2. Cloud check in Supabase (works across any device/phone!)
@@ -38,10 +37,8 @@ function RecipientExperienceContent() {
       if (!isMounted) return;
       if (cloudOrLocalGift) {
         setGift(cloudOrLocalGift);
-        setIsStoredGift(true);
       } else if (!localSaved) {
         setGift(createDemoGiftForSlug(slug));
-        setIsStoredGift(false);
       }
     });
 
@@ -55,8 +52,8 @@ function RecipientExperienceContent() {
     setGift((prev) => ({
       ...prev,
       theme: nextTheme,
-      message: isStoredGift ? prev.message : meta.defaultMessage,
-      songTitle: isStoredGift ? prev.songTitle : meta.defaultSong,
+      message: meta.defaultMessage,
+      songTitle: meta.defaultSong,
     }));
   };
 
@@ -64,7 +61,7 @@ function RecipientExperienceContent() {
     <div className="relative min-h-dvh bg-zinc-950 text-zinc-100 flex flex-col">
       <AmbientBackground theme={gift.theme} />
 
-      {/* Subtle Top Bar for SaaS Viral Loop & Demo Theme Switcher */}
+      {/* Subtle Top Bar for SaaS Viral Loop */}
       <div className="fixed top-3 left-3 right-3 z-40 flex items-center justify-between pointer-events-none">
         <Link
           href="/"
@@ -74,24 +71,29 @@ function RecipientExperienceContent() {
           <span>Crear el mío</span>
         </Link>
 
-        {/* Demo Theme Switcher Pill so anyone testing /d/[slug] can also preview all 3 styles */}
-        <div className="pointer-events-auto inline-flex items-center gap-1 p-1 rounded-full bg-zinc-900/80 border border-zinc-800 backdrop-blur-md shadow-lg">
-          {(["hotwheels", "flores", "aniversario"] as ThemeId[]).map((id) => (
-            <button
-              key={id}
-              type="button"
-              onClick={() => handleQuickDemoTheme(id)}
-              title={`Probar estilo ${THEMES[id].name}`}
-              className={`w-7 h-7 rounded-full text-sm flex items-center justify-center transition-all cursor-pointer ${
-                gift.theme === id
-                  ? "bg-zinc-100 scale-105 shadow"
-                  : "opacity-60 hover:opacity-100"
-              }`}
-            >
-              {THEMES[id].emoji}
-            </button>
-          ))}
-        </div>
+        {/* ONLY shown on /d/demo-* routes so visitors can preview all 3 styles, hidden on real customer gifts! */}
+        {isDemoRoute && (
+          <div className="pointer-events-auto inline-flex items-center gap-1 p-1 pl-2.5 rounded-full bg-zinc-900/85 border border-zinc-800 backdrop-blur-md shadow-lg">
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-amber-400 mr-1">
+              Demo:
+            </span>
+            {(["hotwheels", "flores", "aniversario"] as ThemeId[]).map((id) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => handleQuickDemoTheme(id)}
+                title={`Probar estilo ${THEMES[id].name}`}
+                className={`w-7 h-7 rounded-full text-sm flex items-center justify-center transition-all cursor-pointer ${
+                  gift.theme === id
+                    ? "bg-zinc-100 scale-105 shadow"
+                    : "opacity-60 hover:opacity-100"
+                }`}
+              >
+                {THEMES[id].emoji}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Main Recipient Experience (Splash Unlock -> Themed Card) */}

@@ -163,3 +163,24 @@ body {
 .animate-particle {
   animation: float-particle 9s ease-in-out infinite;
 }
+
+/* Cursor click small rectangles burst effect */
+@keyframes click-rect-burst {
+  0% {
+    transform: translate(-50%, -50%) rotate(var(--rect-rot, 0deg))
+      translateX(3px) scale(0.5);
+    opacity: 1;
+  }
+  70% {
+    opacity: 0.9;
+  }
+  100% {
+    transform: translate(-50%, -50%) rotate(var(--rect-rot, 0deg))
+      translateX(var(--rect-dist, 26px)) scale(0.15);
+    opacity: 0;
+  }
+}
+
+.animate-click-rect {
+  animation: click-rect-burst 0.46s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}

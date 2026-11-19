@@ -11,7 +11,13 @@ import {
   Sparkles,
   X,
 } from "lucide-react";
-import { formatSecondsToMmSs, parseMusicUrl, type ThemeId } from "@/types/gift";
+import { useEffect } from "react";
+import {
+  formatSecondsToMmSs,
+  parseMusicUrl,
+  resolveSongMetadataAndAudio,
+  type ThemeId,
+} from "@/types/gift";
 
 interface MusicFragmentSelectorProps {
   theme: ThemeId;
@@ -102,6 +108,20 @@ export default function MusicFragmentSelector({
   const parsed = parseMusicUrl(musicUrl);
   const hasAttemptedUrl = musicUrl.trim().length > 0;
   const isValidUrl = parsed.provider !== "none" && Boolean(parsed.id);
+
+  // Automatically detect the real song & artist title when the user pastes a YouTube or Spotify link
+  useEffect(() => {
+    let active = true;
+    if (!isValidUrl) return;
+    resolveSongMetadataAndAudio(musicUrl).then((res) => {
+      if (active && res?.displayTitle) {
+        onSongTitleChange(res.displayTitle);
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [musicUrl, isValidUrl, onSongTitleChange]);
 
   const effectiveClipWindow = clipDuration > 0 ? clipDuration : 60;
   const endSeconds = Math.min(

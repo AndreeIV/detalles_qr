@@ -16,12 +16,28 @@ class AmbientAudioManager {
   private isStarted = false;
   private listeners = new Set<AmbientListener>();
 
-  // Dreamy romantic lo-fi / music-box arpeggio progression (Fmaj7 -> Em7 -> Am7 -> Cmaj7)
-  private readonly chords: number[][] = [
-    [349.23, 440.0, 523.25, 659.25], // F4, A4, C5, E5
-    [329.63, 392.0, 493.88, 587.33], // E4, G4, B4, D5
-    [220.0, 329.63, 392.0, 523.25], // A3, E4, G4, C5
-    [261.63, 329.63, 392.0, 493.88], // C4, E4, G4, B4
+  // Warm Lo-Fi Chillhop / Bossa chord progression (Fmaj7 -> Em7 -> Dm7 -> Cmaj7)
+  private readonly progression = [
+    {
+      bass: 87.31, // F2
+      chord: [174.61, 220.0, 261.63, 329.63], // F3, A3, C4, E4
+      melody: [523.25, 440.0, 392.0, 349.23], // C5, A4, G4, F4
+    },
+    {
+      bass: 82.41, // E2
+      chord: [164.81, 196.0, 246.94, 293.66], // E3, G3, B3, D4
+      melody: [493.88, 392.0, 329.63, 392.0], // B4, G4, E4, G4
+    },
+    {
+      bass: 73.42, // D2
+      chord: [146.83, 174.61, 220.0, 261.63], // D3, F3, A3, C4
+      melody: [440.0, 349.23, 329.63, 293.66], // A4, F4, E4, D4
+    },
+    {
+      bass: 65.41, // C2
+      chord: [130.81, 164.81, 196.0, 246.94], // C3, E3, G3, B3
+      melody: [392.0, 329.63, 293.66, 329.63], // G4, E4, D4, E4
+    },
   ];
 
   public subscribe(listener: AmbientListener): () => void {
@@ -75,7 +91,7 @@ class AmbientAudioManager {
       this.playNextNote();
       setInterval(() => {
         this.playNextNote();
-      }, 950);
+      }, 280);
 
       this.notify();
     } catch {
@@ -112,34 +128,125 @@ class AmbientAudioManager {
 
     try {
       const now = this.ctx.currentTime;
-      const chordIdx = Math.floor(this.stepIndex / 4) % this.chords.length;
-      const noteIdx = this.stepIndex % 4;
-      const freq = this.chords[chordIdx][noteIdx];
-      this.stepIndex = (this.stepIndex + 1) % (this.chords.length * 4);
+      const barStep = this.stepIndex % 16; // 16 eighth-note steps per bar
+      const chordIdx =
+        Math.floor(this.stepIndex / 16) % this.progression.length;
+      const bar = this.progression[chordIdx];
+      this.stepIndex = (this.stepIndex + 1) % (this.progression.length * 16);
 
-      // Soft Rhodes / Music-Box tone using sine + triangle through lowpass
-      const osc = this.ctx.createOscillator();
-      const noteGain = this.ctx.createGain();
+      // 1. Soft Lo-Fi Muffled Sub-Kick on steps 0, 6, 8 (relaxed bossa/chillhop groove)
+      if (barStep === 0 || barStep === 6 || barStep === 8) {
+        const kickOsc = this.ctx.createOscillator();
+        const kickGain = this.ctx.createGain();
+        kickOsc.type = "sine";
+        kickOsc.frequency.setValueAtTime(92, now);
+        kickOsc.frequency.exponentialRampToValueAtTime(38, now + 0.14);
 
-      osc.type = "sine";
-      osc.frequency.setValueAtTime(freq, now);
+        const kickLevel = barStep === 0 ? 0.55 : 0.38;
+        kickGain.gain.setValueAtTime(0.001, now);
+        kickGain.gain.linearRampToValueAtTime(kickLevel, now + 0.012);
+        kickGain.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
 
-      noteGain.gain.setValueAtTime(0.001, now);
-      noteGain.gain.exponentialRampToValueAtTime(0.65, now + 0.08);
-      noteGain.gain.exponentialRampToValueAtTime(0.001, now + 2.1);
+        kickOsc.connect(kickGain);
+        kickGain.connect(this.masterGain);
+        kickOsc.start(now);
+        kickOsc.stop(now + 0.19);
+      }
 
-      osc.connect(noteGain);
-      noteGain.connect(this.masterGain);
+      // 2. Soft Brushed Shaker / Hi-Hat on off-beats (steps 2, 4, 10, 12, 14)
+      if (
+        barStep === 2 ||
+        barStep === 4 ||
+        barStep === 10 ||
+        barStep === 12 ||
+        barStep === 14
+      ) {
+        const dur = 0.045;
+        const sr = this.ctx.sampleRate;
+        const buf = this.ctx.createBuffer(1, Math.floor(sr * dur), sr);
+        const data = buf.getChannelData(0);
+        for (let i = 0; i < data.length; i++) {
+          data[i] = (Math.random() * 2 - 1) * 0.5;
+        }
+        const noise = this.ctx.createBufferSource();
+        noise.buffer = buf;
 
-      osc.start(now);
-      osc.stop(now + 2.15);
+        const hatFilter = this.ctx.createBiquadFilter();
+        hatFilter.type = "bandpass";
+        hatFilter.frequency.setValueAtTime(4200, now);
+        hatFilter.Q.setValueAtTime(1.8, now);
+
+        const hatGain = this.ctx.createGain();
+        const hatAmp = barStep === 4 || barStep === 12 ? 0.14 : 0.07;
+        hatGain.gain.setValueAtTime(hatAmp, now);
+        hatGain.gain.exponentialRampToValueAtTime(0.001, now + dur);
+
+        noise.connect(hatFilter);
+        hatFilter.connect(hatGain);
+        hatGain.connect(this.masterGain);
+        noise.start(now);
+        noise.stop(now + dur + 0.005);
+      }
+
+      // 3. Warm Sub-Bass & Velvety Low-Passed Rhodes Chords on steps 0, 3, 6, 10
+      if (barStep === 0 || barStep === 3 || barStep === 6 || barStep === 10) {
+        const chordFilter = this.ctx.createBiquadFilter();
+        chordFilter.type = "lowpass";
+        chordFilter.frequency.setValueAtTime(620, now);
+        chordFilter.connect(this.masterGain);
+
+        const dur = barStep === 0 || barStep === 6 ? 1.1 : 0.65;
+        const freqs = barStep === 0 ? [bar.bass, ...bar.chord] : bar.chord;
+
+        for (const freq of freqs) {
+          const osc = this.ctx.createOscillator();
+          const g = this.ctx.createGain();
+          osc.type = freq < 110 ? "sine" : "triangle";
+          osc.frequency.setValueAtTime(freq, now);
+
+          const peak = freq < 110 ? 0.34 : 0.14;
+          g.gain.setValueAtTime(0.001, now);
+          g.gain.linearRampToValueAtTime(peak, now + 0.04);
+          g.gain.exponentialRampToValueAtTime(0.001, now + dur);
+
+          osc.connect(g);
+          g.connect(chordFilter);
+          osc.start(now);
+          osc.stop(now + dur + 0.02);
+        }
+      }
+
+      // 4. Gentle Bell / Rhodes Melody on steps 2, 7, 11, 14
+      const melodyStepMap: Record<number, number> = {
+        2: 0,
+        7: 1,
+        11: 2,
+        14: 3,
+      };
+      if (melodyStepMap[barStep] !== undefined) {
+        const melFreq = bar.melody[melodyStepMap[barStep]];
+        const melOsc = this.ctx.createOscillator();
+        const melGain = this.ctx.createGain();
+
+        melOsc.type = "sine";
+        melOsc.frequency.setValueAtTime(melFreq, now);
+
+        melGain.gain.setValueAtTime(0.001, now);
+        melGain.gain.linearRampToValueAtTime(0.22, now + 0.03);
+        melGain.gain.exponentialRampToValueAtTime(0.001, now + 0.85);
+
+        melOsc.connect(melGain);
+        melGain.connect(this.masterGain);
+        melOsc.start(now);
+        melOsc.stop(now + 0.9);
+      }
     } catch {
       // Ignore note playback errors
     }
   }
 
   /**
-   * Plays a crisp, tactile UI click sound on cursor click / tap.
+   * Plays a deeper, soft low-pitched tactile UI click ("thock") on cursor click / tap.
    */
   public playClickSound() {
     if (this.isMuted) return;
@@ -154,20 +261,26 @@ class AmbientAudioManager {
     try {
       const now = this.ctx.currentTime;
       const osc = this.ctx.createOscillator();
+      const filter = this.ctx.createBiquadFilter();
       const clickGain = this.ctx.createGain();
 
-      osc.type = "triangle";
-      osc.frequency.setValueAtTime(980, now);
-      osc.frequency.exponentialRampToValueAtTime(280, now + 0.032);
+      // Lower-pitched, warm soft tap (320 Hz -> 110 Hz)
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(320, now);
+      osc.frequency.exponentialRampToValueAtTime(110, now + 0.042);
 
-      clickGain.gain.setValueAtTime(0.055, now);
-      clickGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.035);
+      filter.type = "lowpass";
+      filter.frequency.setValueAtTime(460, now);
 
-      osc.connect(clickGain);
+      clickGain.gain.setValueAtTime(0.048, now);
+      clickGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.045);
+
+      osc.connect(filter);
+      filter.connect(clickGain);
       clickGain.connect(this.ctx.destination);
 
       osc.start(now);
-      osc.stop(now + 0.038);
+      osc.stop(now + 0.048);
     } catch {
       // Ignore click sound errors
     }

@@ -19,12 +19,14 @@ create table if not exists public.gifts (
   music_start_seconds integer not null default 0,
   music_clip_duration integer not null default 30,
   location_name text not null default 'Lima, Perú',
+  buyer_phone text not null default '',
   is_paid boolean not null default true,
   created_at timestamptz not null default now()
 );
 
--- Si ya habías creado la tabla antes, esta línea agrega la columna location_name sin borrar tus datos:
+-- Si ya habías creado la tabla antes, estas líneas agregan las columnas nuevas sin borrar tus datos:
 alter table public.gifts add column if not exists location_name text not null default 'Lima, Perú';
+alter table public.gifts add column if not exists buyer_phone text not null default '';
 
 -- 2. Activar Row Level Security (RLS) y permitir lectura/creación pública
 alter table public.gifts enable row level security;

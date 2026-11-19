@@ -17,6 +17,7 @@ import {
   MessageSquareHeart,
   Music2,
   QrCode,
+  Search,
   ShieldCheck,
   Smartphone,
   Sparkles,
@@ -154,21 +155,23 @@ export default function BuilderDashboardPage() {
   const [isPreviewPlaying, setIsPreviewPlaying] = useState(false);
 
   const [isPaymentOpen, setIsPaymentOpen] = useState(false);
+  const [paymentModalMode, setPaymentModalMode] = useState<"pay" | "recover">(
+    "pay",
+  );
   const [mobileTab, setMobileTab] = useState<"editor" | "preview">("editor");
   const [nowTimestamp, setNowTimestamp] = useState<number | undefined>(
     undefined,
   );
 
+  const openPaymentModal = (mode: "pay" | "recover" = "pay") => {
+    setPaymentModalMode(mode);
+    setIsPaymentOpen(true);
+  };
+
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setNowTimestamp(Date.now());
-    // Silently detect city by IP on initial load if the user hasn't edited it
-    detectUserCity(false).then((detected) => {
-      if (detected) {
-        setLocationName((prev) => (prev === "Lima, Perú" ? detected : prev));
-      }
-    });
     // Silently detect city by IP on initial load if the user hasn't edited it
     detectUserCity(false).then((detected) => {
       if (detected) {
@@ -309,6 +312,17 @@ export default function BuilderDashboardPage() {
           </div>
 
           <div className="flex items-center gap-2 sm:gap-2.5">
+            {/* Recover QR Button (Always accessible in Navbar!) */}
+            <button
+              type="button"
+              onClick={() => openPaymentModal("recover")}
+              className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-2 rounded-xl border bg-zinc-900/90 hover:bg-zinc-800 border-zinc-800 text-zinc-200 text-xs font-semibold transition-all cursor-pointer"
+              title="Recuperar un QR ya pagado"
+            >
+              <Search className="w-3.5 h-3.5 text-amber-400" />
+              <span className="hidden sm:inline">Recuperar QR</span>
+            </button>
+
             {/* Global Couples Map Button (Always accessible in Navbar!) */}
             <button
               type="button"
@@ -339,7 +353,7 @@ export default function BuilderDashboardPage() {
 
                 <button
                   type="button"
-                  onClick={() => setIsPaymentOpen(true)}
+                  onClick={() => openPaymentModal("pay")}
                   className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-bold bg-gradient-to-r from-amber-400 via-orange-500 to-rose-500 text-zinc-950 shadow-lg shadow-orange-500/20 hover:brightness-105 transition-all cursor-pointer"
                 >
                   <QrCode className="w-4 h-4" />
@@ -1235,7 +1249,7 @@ export default function BuilderDashboardPage() {
 
                           <button
                             type="button"
-                            onClick={() => setIsPaymentOpen(true)}
+                            onClick={() => openPaymentModal("pay")}
                             className="w-full py-4 px-6 rounded-2xl font-bold text-base bg-gradient-to-r from-amber-400 via-orange-500 to-rose-500 text-zinc-950 shadow-xl shadow-orange-500/25 hover:brightness-105 active:scale-[0.99] transition-all flex items-center justify-center gap-2.5 cursor-pointer animate-cta-hop shimmer-btn"
                           >
                             <QrCode className="w-5 h-5 stroke-[2.5]" />
@@ -1275,7 +1289,7 @@ export default function BuilderDashboardPage() {
                       ) : (
                         <button
                           type="button"
-                          onClick={() => setIsPaymentOpen(true)}
+                          onClick={() => openPaymentModal("pay")}
                           className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold text-xs sm:text-sm bg-emerald-500 hover:bg-emerald-400 text-zinc-950 shadow-lg shadow-emerald-500/20 transition-all cursor-pointer"
                         >
                           <Sparkles className="w-4 h-4" />
@@ -1309,6 +1323,9 @@ export default function BuilderDashboardPage() {
         isOpen={isPaymentOpen}
         onClose={() => setIsPaymentOpen(false)}
         gift={currentGift}
+        initialMode={paymentModalMode}
+        canActivateNewQr={viewMode === "builder"}
+        onStartEditing={() => handleStartBuilding()}
       />
     </div>
   );

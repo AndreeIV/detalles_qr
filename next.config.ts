@@ -8,6 +8,7 @@ const nextConfig: NextConfig = {
     "100.71.7.114",
     "localhost",
   ],
+  devIndicators: false,
   experimental: {
     agentFeedback: true,
   },

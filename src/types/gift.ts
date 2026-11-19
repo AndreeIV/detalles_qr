@@ -15,6 +15,7 @@ export interface GiftData {
   musicStartSeconds?: number;
   musicClipDuration?: number;
   locationName?: string;
+  buyerPhone?: string;
 }
 
 export type MusicProvider = "spotify" | "youtube" | "none";
@@ -86,6 +87,113 @@ export function formatSecondsToMmSs(totalSeconds = 0): string {
   const mins = Math.floor(safe / 60);
   const secs = safe % 60;
   return `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+}
+
+export interface ResolvedSongAudio {
+  displayTitle: string;
+  previewAudioUrl: string | null;
+}
+
+const resolvedAudioCache = new Map<string, ResolvedSongAudio>();
+
+/**
+ * Resolves any YouTube or Spotify song link into its real Song + Artist title
+ * and a direct HTML5 <audio> (.m4a) stream URL via oEmbed + iTunes Search API.
+ * This prevents YouTube "Video no disponible" (- Topic / VEVO / IP restrictions)
+ * and enables true HTML5 volume fade-in and fade-out on mobile phones.
+ */
+export async function resolveSongMetadataAndAudio(
+  musicUrl?: string,
+  fallbackSongTitle?: string,
+): Promise<ResolvedSongAudio | null> {
+  const parsed = parseMusicUrl(musicUrl);
+  if (parsed.provider === "none" || !parsed.id) return null;
+
+  const cacheKey = `${parsed.provider}:${parsed.id}`;
+  const cached = resolvedAudioCache.get(cacheKey);
+  if (cached) return cached;
+
+  try {
+    let searchTerm = "";
+    let oembedTitle = "";
+
+    if (parsed.provider === "youtube") {
+      const cleanYtUrl = `https://www.youtube.com/watch?v=${parsed.id}`;
+      const oeRes = await fetch(
+        `https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(cleanYtUrl)}`,
+      );
+      if (oeRes.ok) {
+        const oe = (await oeRes.json()) as {
+          title?: string;
+          author_name?: string;
+        };
+        const rawTitle = (oe.title || "")
+          .replace(/\(.*?\)|\[.*?\]/g, "")
+          .replace(/official\s*(music\s*)?video|audio|lyrics?|hd|4k/gi, "")
+          .trim();
+        const rawAuthor = (oe.author_name || "")
+          .replace(/\s*-\s*Topic$/i, "")
+          .replace(/VEVO$/i, "")
+          .replace(/Official$/i, "")
+          .trim();
+
+        oembedTitle =
+          rawAuthor && !rawTitle.toLowerCase().includes(rawAuthor.toLowerCase())
+            ? `${rawTitle} — ${rawAuthor}`
+            : rawTitle;
+        searchTerm = `${rawTitle} ${rawAuthor}`.trim();
+      }
+    } else if (parsed.provider === "spotify") {
+      const kind = parsed.spotifyKind || "track";
+      const cleanSpUrl = `https://open.spotify.com/${kind}/${parsed.id}`;
+      const oeRes = await fetch(
+        `https://open.spotify.com/oembed?url=${encodeURIComponent(cleanSpUrl)}`,
+      );
+      if (oeRes.ok) {
+        const oe = (await oeRes.json()) as { title?: string };
+        oembedTitle = (oe.title || "").trim();
+        searchTerm = oembedTitle;
+      }
+    }
+
+    if (!searchTerm && fallbackSongTitle) {
+      searchTerm = fallbackSongTitle.replace(/—/g, " ").trim();
+    }
+
+    let previewAudioUrl: string | null = null;
+    let finalTitle = oembedTitle || fallbackSongTitle || "Canción Especial";
+
+    if (searchTerm) {
+      const itRes = await fetch(
+        `https://itunes.apple.com/search?term=${encodeURIComponent(searchTerm)}&entity=song&limit=1`,
+      );
+      if (itRes.ok) {
+        const itData = (await itRes.json()) as {
+          results?: Array<{
+            trackName?: string;
+            artistName?: string;
+            previewUrl?: string;
+          }>;
+        };
+        const hit = itData.results?.[0];
+        if (hit?.previewUrl) {
+          previewAudioUrl = hit.previewUrl;
+          if (hit.trackName && hit.artistName) {
+            finalTitle = `${hit.trackName} — ${hit.artistName}`;
+          }
+        }
+      }
+    }
+
+    const result: ResolvedSongAudio = {
+      displayTitle: finalTitle,
+      previewAudioUrl,
+    };
+    resolvedAudioCache.set(cacheKey, result);
+    return result;
+  } catch {
+    return null;
+  }
 }
 
 export interface ThemeMeta {
@@ -265,10 +373,16 @@ export function calculateDaysTogether(
 }
 
 const STORAGE_PREFIX = "detalles_qr_gift_";
+const LAST_CREATED_SLUG_KEY = "detalles_qr_last_created_slug";
+
+export function normalizePhoneDigits(phone?: string): string {
+  return (phone || "").replace(/\D/g, "");
+}
 
 export function saveGiftToStorage(gift: GiftData): void {
   if (typeof window === "undefined") return;
   try {
+    window.localStorage.setItem(LAST_CREATED_SLUG_KEY, gift.slug);
     window.localStorage.setItem(
       `${STORAGE_PREFIX}${gift.slug}`,
       JSON.stringify(gift),
@@ -276,6 +390,7 @@ export function saveGiftToStorage(gift: GiftData): void {
   } catch {
     // Fallback if imageUrl exceeds localStorage quota: save without heavy base64
     try {
+      window.localStorage.setItem(LAST_CREATED_SLUG_KEY, gift.slug);
       window.localStorage.setItem(
         `${STORAGE_PREFIX}${gift.slug}`,
         JSON.stringify({ ...gift, imageUrl: null }),
@@ -283,6 +398,17 @@ export function saveGiftToStorage(gift: GiftData): void {
     } catch {
       // Ignore storage quota errors silently
     }
+  }
+}
+
+export function getLastCreatedGiftFromStorage(): GiftData | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const lastSlug = window.localStorage.getItem(LAST_CREATED_SLUG_KEY);
+    if (!lastSlug) return null;
+    return getGiftFromStorage(lastSlug);
+  } catch {
+    return null;
   }
 }
 
@@ -367,22 +493,36 @@ export async function saveGiftCloudOrLocal(
       music_clip_duration: gift.musicClipDuration ?? 30,
     };
 
-    // Try upserting with location_name first
+    const cleanPhone = normalizePhoneDigits(gift.buyerPhone);
+
+    // Try upserting with location_name and buyer_phone first
     const { error } = await supabase.from("gifts").upsert(
       {
         ...baseRow,
         location_name: gift.locationName?.trim() || "Lima, Perú",
+        buyer_phone: cleanPhone,
       },
       { onConflict: "slug" },
     );
 
     if (error) {
-      // Fallback if the user hasn't run ALTER TABLE for location_name yet
-      const { error: retryErr } = await supabase
-        .from("gifts")
-        .upsert(baseRow, { onConflict: "slug" });
-      if (retryErr) {
-        return { savedToCloud: false };
+      // Fallback 1: try with location_name only (in case buyer_phone column wasn't added yet)
+      const { error: locOnlyErr } = await supabase.from("gifts").upsert(
+        {
+          ...baseRow,
+          location_name: gift.locationName?.trim() || "Lima, Perú",
+        },
+        { onConflict: "slug" },
+      );
+
+      if (locOnlyErr) {
+        // Fallback 2: base columns only
+        const { error: retryErr } = await supabase
+          .from("gifts")
+          .upsert(baseRow, { onConflict: "slug" });
+        if (retryErr) {
+          return { savedToCloud: false };
+        }
       }
     }
 
@@ -421,6 +561,7 @@ export async function fetchGiftCloudOrLocal(
           musicStartSeconds: Number(data.music_start_seconds ?? 0),
           musicClipDuration: Number(data.music_clip_duration ?? 30),
           locationName: (data.location_name as string) || "Lima, Perú",
+          buyerPhone: (data.buyer_phone as string) || "",
         };
       }
     } catch {
@@ -429,6 +570,112 @@ export async function fetchGiftCloudOrLocal(
   }
 
   return getGiftFromStorage(slug);
+}
+
+/**
+ * Recovers gifts by buyer phone number + recipient name from Supabase and localStorage.
+ */
+export async function recoverGiftsByPhoneAndRecipient(
+  buyerPhone: string,
+  recipientName: string,
+): Promise<GiftData[]> {
+  const cleanPhone = normalizePhoneDigits(buyerPhone);
+  const normalizeText = (t: string) =>
+    t
+      .trim()
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "");
+
+  const targetRecipient = normalizeText(recipientName);
+  const resultsMap = new Map<string, GiftData>();
+
+  // 1. Check Supabase cloud database
+  if (supabase) {
+    try {
+      const { data, error } = await supabase
+        .from("gifts")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(100);
+
+      if (!error && data) {
+        for (const row of data) {
+          const rowPhone = normalizePhoneDigits(String(row.buyer_phone || ""));
+          const rowRecipient = normalizeText(String(row.recipient_name || ""));
+          const rowSender = normalizeText(String(row.sender_name || ""));
+
+          const phoneMatches =
+            cleanPhone.length >= 6 &&
+            rowPhone.length >= 6 &&
+            (rowPhone.includes(cleanPhone) || cleanPhone.includes(rowPhone));
+
+          const recipientMatches =
+            targetRecipient.length >= 2 &&
+            (rowRecipient.includes(targetRecipient) ||
+              targetRecipient.includes(rowRecipient));
+
+          // Match if (phone + recipient match), OR if older gift had no phone saved yet and user typed sender Phone/Name + recipient
+          const legacyMatchWithoutPhone =
+            rowPhone.length === 0 &&
+            recipientMatches &&
+            normalizeText(buyerPhone).length >= 2 &&
+            rowSender.includes(normalizeText(buyerPhone));
+
+          if ((phoneMatches && recipientMatches) || legacyMatchWithoutPhone) {
+            const slug = String(row.slug);
+            resultsMap.set(slug, {
+              slug,
+              theme: (row.theme as ThemeId) || "flores",
+              senderName: String(row.sender_name || "Mateo"),
+              recipientName: String(row.recipient_name || "Valentina"),
+              message: String(row.message || ""),
+              imageUrl: (row.image_url as string | null) ?? null,
+              startDate: String(row.start_date || "2024-09-21"),
+              songTitle: String(row.song_title || ""),
+              musicUrl: String(row.music_url || ""),
+              musicStartSeconds: Number(row.music_start_seconds ?? 0),
+              musicClipDuration: Number(row.music_clip_duration ?? 30),
+              locationName: String(row.location_name || "Lima, Perú"),
+              buyerPhone: rowPhone,
+            });
+          }
+        }
+      }
+    } catch {
+      // Ignore cloud query errors and check local storage
+    }
+  }
+
+  // 2. Check localStorage on current device
+  if (typeof window !== "undefined") {
+    try {
+      for (let i = 0; i < window.localStorage.length; i++) {
+        const key = window.localStorage.key(i);
+        if (!key || !key.startsWith(STORAGE_PREFIX)) continue;
+        const raw = window.localStorage.getItem(key);
+        if (!raw) continue;
+        const parsed = JSON.parse(raw) as GiftData;
+        const localPhone = normalizePhoneDigits(parsed.buyerPhone);
+        const localRecipient = normalizeText(parsed.recipientName || "");
+
+        const phoneMatches =
+          cleanPhone.length >= 6 &&
+          (localPhone.includes(cleanPhone) || localPhone.length === 0);
+        const recipientMatches =
+          targetRecipient.length >= 2 &&
+          localRecipient.includes(targetRecipient);
+
+        if (phoneMatches && recipientMatches && !resultsMap.has(parsed.slug)) {
+          resultsMap.set(parsed.slug, parsed);
+        }
+      }
+    } catch {
+      // Ignore storage access errors
+    }
+  }
+
+  return Array.from(resultsMap.values());
 }
 
 export interface PublicCoupleEntry {

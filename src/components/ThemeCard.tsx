@@ -11,7 +11,6 @@ import {
   Play,
   Sparkles,
   Trophy,
-  Tv,
   Volume2,
 } from "lucide-react";
 import Image from "next/image";
@@ -20,6 +19,8 @@ import {
   formatSecondsToMmSs,
   type GiftData,
   parseMusicUrl,
+  type ResolvedSongAudio,
+  resolveSongMetadataAndAudio,
   THEMES,
 } from "@/types/gift";
 
@@ -345,7 +346,9 @@ function MusicPlayerBar({
   barColorClass,
   containerClass,
 }: MusicPlayerBarProps) {
-  const [showYoutubeVideo, setShowYoutubeVideo] = useState(false);
+  const [resolvedSong, setResolvedSong] = useState<ResolvedSongAudio | null>(
+    null,
+  );
 
   const parsed = parseMusicUrl(gift.musicUrl);
   const startSec = Math.max(0, Math.floor(gift.musicStartSeconds ?? 0));
@@ -360,72 +363,36 @@ function MusicPlayerBar({
     return () => clearTimeout(timer);
   }, [startSec]);
 
+  // Automatically resolve YouTube / Spotify URLs to direct HTML5 <audio> (.m4a) stream
+  // so songs play reliably on any mobile phone without YouTube "Video no disponible" blocks
+  useEffect(() => {
+    let isMounted = true;
+    if (parsed.provider === "none" || !parsed.id) {
+      setResolvedSong(null);
+      return;
+    }
+    resolveSongMetadataAndAudio(gift.musicUrl, songLabel).then((res) => {
+      if (isMounted) {
+        setResolvedSong(res);
+      }
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, [gift.musicUrl, parsed.provider, parsed.id, songLabel]);
+
+  const effectiveSongTitle =
+    resolvedSong?.displayTitle && songLabel === THEMES[gift.theme].defaultSong
+      ? resolvedSong.displayTitle
+      : songLabel;
+
   const rangeLabel =
     clipDuration > 0
       ? `${formatSecondsToMmSs(startSec)} – ${formatSecondsToMmSs(startSec + clipDuration)}`
       : `Desde ${formatSecondsToMmSs(startSec)}`;
 
-  // 1) Official Spotify IFrame API Player (seeks to settledStartSec & unmounts when paused/stopped!)
-  if (parsed.provider === "spotify" && parsed.id) {
-    const kind = parsed.spotifyKind || "track";
-
-    return (
-      <div className={`rounded-2xl border p-2.5 space-y-2 ${containerClass}`}>
-        <div className="flex items-center justify-between gap-2 px-1 text-[11px]">
-          <div className="flex items-center gap-2 min-w-0">
-            <button
-              type="button"
-              onClick={onTogglePlay}
-              aria-label={
-                isPlaying
-                  ? "Detener reproductor Spotify"
-                  : "Reproducir fragmento Spotify"
-              }
-              className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 transition-transform active:scale-95 shadow cursor-pointer ${
-                isPlaying
-                  ? "bg-emerald-500 text-zinc-950"
-                  : "bg-zinc-800 hover:bg-zinc-700 text-emerald-400"
-              }`}
-            >
-              {isPlaying ? (
-                <Pause className="w-3.5 h-3.5 fill-current" />
-              ) : (
-                <Play className="w-3.5 h-3.5 fill-current ml-0.5" />
-              )}
-            </button>
-            <div className="min-w-0">
-              <p className="font-semibold text-emerald-400 truncate">
-                Spotify • {songLabel}
-              </p>
-              <p className="text-[10px] text-zinc-400">
-                {isPlaying
-                  ? `Sonando desde ${formatSecondsToMmSs(settledStartSec)}`
-                  : `Listo en ${formatSecondsToMmSs(startSec)} • Toca Play`}
-              </p>
-            </div>
-          </div>
-
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-[10px] font-mono text-emerald-300 shrink-0">
-            <Clock className="w-2.5 h-2.5" />
-            {rangeLabel}
-          </span>
-        </div>
-
-        {isPlaying && (
-          <SpotifyControllerEmbed
-            key={`${parsed.id}-${settledStartSec}-${clipDuration}`}
-            spotifyKind={kind}
-            spotifyId={parsed.id}
-            startSec={settledStartSec}
-            clipDuration={clipDuration}
-          />
-        )}
-      </div>
-    );
-  }
-
-  // 2) YouTube Custom Story-Clip Player (starts at settledStartSec and loops back to settledStartSec!)
-  if (parsed.provider === "youtube" && parsed.id) {
+  // 1) If we resolved a direct HTML5 <audio> stream (works for YouTube & Spotify songs on all phones!)
+  if (parsed.provider !== "none" && resolvedSong?.previewAudioUrl) {
     return (
       <div className={`rounded-2xl border p-2.5 space-y-2 ${containerClass}`}>
         <div className="flex items-center gap-3">
@@ -446,26 +413,16 @@ function MusicPlayerBar({
             <div className="flex items-center gap-1.5 text-[11px] font-semibold text-zinc-100 truncate">
               <Music className="w-3 h-3 shrink-0 opacity-80" />
               <span className="truncate">
-                {isPlaying ? `🎵 ${songLabel}` : `En pausa • ${songLabel}`}
+                {isPlaying
+                  ? `🎵 ${effectiveSongTitle}`
+                  : `En pausa • ${effectiveSongTitle}`}
               </span>
             </div>
             <div className="flex items-center gap-2 mt-0.5">
               <span className="inline-flex items-center gap-1 text-[10px] font-mono text-amber-300">
                 <Clock className="w-2.5 h-2.5" />
-                {rangeLabel}
+                {rangeLabel} • Fade In/Out
               </span>
-              {isPlaying && (
-                <button
-                  type="button"
-                  onClick={() => setShowYoutubeVideo((v) => !v)}
-                  className="inline-flex items-center gap-1 text-[10px] text-zinc-400 hover:text-zinc-200 underline cursor-pointer"
-                >
-                  <Tv className="w-2.5 h-2.5" />
-                  <span>
-                    {showYoutubeVideo ? "Ocultar video" : "Ver video"}
-                  </span>
-                </button>
-              )}
             </div>
           </div>
 
@@ -497,15 +454,148 @@ function MusicPlayerBar({
           </div>
         </div>
 
-        {/* Only mounted while isPlaying === true so pausing or changing step stops audio immediately! */}
+        {isPlaying && (
+          <DirectAudioFadePlayer
+            key={`${resolvedSong.previewAudioUrl}-${settledStartSec}-${clipDuration}`}
+            audioUrl={resolvedSong.previewAudioUrl}
+            startSec={settledStartSec}
+            clipDuration={clipDuration}
+          />
+        )}
+      </div>
+    );
+  }
+
+  // 2) Official Spotify IFrame API Player fallback
+  if (parsed.provider === "spotify" && parsed.id) {
+    const kind = parsed.spotifyKind || "track";
+
+    return (
+      <div className={`rounded-2xl border p-2.5 space-y-2 ${containerClass}`}>
+        <div className="flex items-center justify-between gap-2 px-1 text-[11px]">
+          <div className="flex items-center gap-2 min-w-0">
+            <button
+              type="button"
+              onClick={onTogglePlay}
+              aria-label={
+                isPlaying
+                  ? "Detener reproductor Spotify"
+                  : "Reproducir fragmento Spotify"
+              }
+              className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 transition-transform active:scale-95 shadow cursor-pointer ${
+                isPlaying
+                  ? "bg-emerald-500 text-zinc-950"
+                  : "bg-zinc-800 hover:bg-zinc-700 text-emerald-400"
+              }`}
+            >
+              {isPlaying ? (
+                <Pause className="w-3.5 h-3.5 fill-current" />
+              ) : (
+                <Play className="w-3.5 h-3.5 fill-current ml-0.5" />
+              )}
+            </button>
+            <div className="min-w-0">
+              <p className="font-semibold text-emerald-400 truncate">
+                Spotify • {effectiveSongTitle}
+              </p>
+              <p className="text-[10px] text-zinc-400">
+                {isPlaying
+                  ? `Sonando desde ${formatSecondsToMmSs(settledStartSec)}`
+                  : `Listo en ${formatSecondsToMmSs(startSec)} • Toca Play`}
+              </p>
+            </div>
+          </div>
+
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-[10px] font-mono text-emerald-300 shrink-0">
+            <Clock className="w-2.5 h-2.5" />
+            {rangeLabel}
+          </span>
+        </div>
+
+        {isPlaying && (
+          <SpotifyControllerEmbed
+            key={`${parsed.id}-${settledStartSec}-${clipDuration}`}
+            spotifyKind={kind}
+            spotifyId={parsed.id}
+            startSec={settledStartSec}
+            clipDuration={clipDuration}
+          />
+        )}
+      </div>
+    );
+  }
+
+  // 3) YouTube Custom Story-Clip Player fallback (no "Ver video" button, with Fade-In/Out!)
+  if (parsed.provider === "youtube" && parsed.id) {
+    return (
+      <div className={`rounded-2xl border p-2.5 space-y-2 ${containerClass}`}>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={onTogglePlay}
+            aria-label={isPlaying ? "Pausar música" : "Reproducir música"}
+            className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 transition-transform active:scale-95 shadow cursor-pointer ${accentClass}`}
+          >
+            {isPlaying ? (
+              <Pause className="w-4 h-4 fill-current" />
+            ) : (
+              <Play className="w-4 h-4 fill-current ml-0.5" />
+            )}
+          </button>
+
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1.5 text-[11px] font-semibold text-zinc-100 truncate">
+              <Music className="w-3 h-3 shrink-0 opacity-80" />
+              <span className="truncate">
+                {isPlaying
+                  ? `🎵 ${effectiveSongTitle}`
+                  : `En pausa • ${effectiveSongTitle}`}
+              </span>
+            </div>
+            <div className="flex items-center gap-2 mt-0.5">
+              <span className="inline-flex items-center gap-1 text-[10px] font-mono text-amber-300">
+                <Clock className="w-2.5 h-2.5" />
+                {rangeLabel} • Fade In/Out
+              </span>
+            </div>
+          </div>
+
+          {/* Equalizer animation */}
+          <div
+            className="flex items-end gap-0.5 h-4 px-1 shrink-0"
+            aria-hidden="true"
+          >
+            <span
+              className={`w-1 h-full rounded-full origin-bottom ${barColorClass} ${
+                isPlaying ? "animate-eq-1" : "scale-y-25"
+              }`}
+            />
+            <span
+              className={`w-1 h-full rounded-full origin-bottom ${barColorClass} ${
+                isPlaying ? "animate-eq-2" : "scale-y-50"
+              }`}
+            />
+            <span
+              className={`w-1 h-full rounded-full origin-bottom ${barColorClass} ${
+                isPlaying ? "animate-eq-3" : "scale-y-35"
+              }`}
+            />
+            <span
+              className={`w-1 h-full rounded-full origin-bottom ${barColorClass} ${
+                isPlaying ? "animate-eq-4" : "scale-y-25"
+              }`}
+            />
+          </div>
+        </div>
+
+        {/* Only mounted while isPlaying === true */}
         {isPlaying && (
           <YouTubeClipEmbed
             key={`${parsed.id}-${settledStartSec}-${clipDuration}`}
             videoId={parsed.id}
             startSec={settledStartSec}
             clipDuration={clipDuration}
-            showVideo={showYoutubeVideo}
-            songLabel={songLabel}
+            songLabel={effectiveSongTitle}
           />
         )}
       </div>
@@ -574,56 +664,167 @@ function MusicPlayerBar({
 }
 
 /**
- * YouTube Clip Embed that starts strictly at `startSec` and loops back to `startSec`
- * (never to 00:00) whenever `clipDuration` elapses or the video ends.
+ * Native HTML5 <audio> player with smooth Volume Fade-In (0 -> 100% over 2.5s)
+ * and Volume Fade-Out (100% -> 0 over the last 2.5s before looping).
+ */
+function DirectAudioFadePlayer({
+  audioUrl,
+  startSec,
+  clipDuration,
+}: {
+  audioUrl: string;
+  startSec: number;
+  clipDuration: number;
+}) {
+  const audioRef = useRef<HTMLAudioElement>(null);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    const FADE_SEC = 2.6;
+    const MAX_VOL = 0.92;
+    let effectiveStart = 0;
+    let effectiveWindow = clipDuration > 0 ? clipDuration : 29;
+
+    const initAndPlay = () => {
+      const dur =
+        Number.isFinite(audio.duration) && audio.duration > 0
+          ? audio.duration
+          : 30;
+      // If startSec is within the stream duration (with at least 6s left), use startSec;
+      // otherwise map into the available chorus stream so it always plays a full clip.
+      effectiveStart =
+        startSec < dur - 7
+          ? startSec
+          : clipDuration > 0 && clipDuration < dur - 2
+            ? Math.max(0, Math.min(dur - clipDuration, startSec % 12))
+            : 0;
+      effectiveWindow =
+        clipDuration > 0
+          ? Math.min(clipDuration, dur - effectiveStart)
+          : dur - effectiveStart;
+
+      audio.currentTime = effectiveStart;
+      audio.volume = 0.01;
+      audio.play().catch(() => {});
+    };
+
+    if (audio.readyState >= 1) {
+      initAndPlay();
+    } else {
+      audio.addEventListener("loadedmetadata", initAndPlay, { once: true });
+    }
+
+    const fadeTimer = setInterval(() => {
+      if (!audio || audio.paused) return;
+      const elapsed = Math.max(0, audio.currentTime - effectiveStart);
+      const remaining = Math.max(0, effectiveWindow - elapsed);
+
+      if (remaining <= 0.12 || audio.ended) {
+        // Loop back to effectiveStart and reset volume to 0 for next Fade-In
+        audio.currentTime = effectiveStart;
+        audio.volume = 0.01;
+        audio.play().catch(() => {});
+        return;
+      }
+
+      let targetVol = MAX_VOL;
+      if (elapsed < FADE_SEC) {
+        // Smooth Fade-In (0 -> MAX_VOL)
+        targetVol = Math.max(0.01, (elapsed / FADE_SEC) * MAX_VOL);
+      } else if (remaining < FADE_SEC) {
+        // Smooth Fade-Out (MAX_VOL -> 0)
+        targetVol = Math.max(0.01, (remaining / FADE_SEC) * MAX_VOL);
+      }
+
+      audio.volume = Math.min(1, Math.max(0, targetVol));
+    }, 80);
+
+    return () => {
+      clearInterval(fadeTimer);
+      audio.pause();
+    };
+  }, [startSec, clipDuration]);
+
+  return (
+    <audio
+      ref={audioRef}
+      src={audioUrl}
+      preload="auto"
+      playsInline
+      className="hidden"
+    >
+      <track kind="captions" />
+    </audio>
+  );
+}
+
+/**
+ * YouTube Clip Embed fallback (audio-only) with Volume Fade-In (0 -> 100) and Fade-Out (100 -> 0)
  */
 function YouTubeClipEmbed({
   videoId,
   startSec,
   clipDuration,
-  showVideo,
   songLabel,
 }: {
   videoId: string;
   startSec: number;
   clipDuration: number;
-  showVideo: boolean;
   songLabel: string;
 }) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [reloadCount, setReloadCount] = useState(0);
+  const cycleStartRef = useRef<number>(Date.now());
 
-  const seekToStart = () => {
+  const sendYtCommand = (func: string, args: unknown[] = []) => {
     const win = iframeRef.current?.contentWindow;
     if (!win) return;
     try {
       win.postMessage(
         JSON.stringify({
           event: "command",
-          func: "seekTo",
-          args: [startSec, true],
-        }),
-        "*",
-      );
-      win.postMessage(
-        JSON.stringify({
-          event: "command",
-          func: "playVideo",
-          args: [],
+          func,
+          args,
         }),
         "*",
       );
     } catch {
-      setReloadCount((c) => c + 1);
+      // Ignore postMessage errors
     }
   };
 
+  const seekToStart = () => {
+    cycleStartRef.current = Date.now();
+    sendYtCommand("setVolume", [0]);
+    sendYtCommand("seekTo", [startSec, true]);
+    sendYtCommand("playVideo", []);
+  };
+
   useEffect(() => {
-    if (clipDuration <= 0) return;
-    const interval = setInterval(() => {
-      seekToStart();
-    }, clipDuration * 1000);
-    return () => clearInterval(interval);
+    const windowDuration = clipDuration > 0 ? clipDuration : 30;
+    const FADE_SEC = 2.6;
+
+    const fadeInterval = setInterval(() => {
+      const elapsedSec = (Date.now() - cycleStartRef.current) / 1000;
+      const remainingSec = windowDuration - elapsedSec;
+
+      if (clipDuration > 0 && remainingSec <= 0) {
+        seekToStart();
+        return;
+      }
+
+      let vol = 100;
+      if (elapsedSec < FADE_SEC) {
+        vol = Math.round((elapsedSec / FADE_SEC) * 100);
+      } else if (clipDuration > 0 && remainingSec < FADE_SEC) {
+        vol = Math.max(0, Math.round((remainingSec / FADE_SEC) * 100));
+      }
+      sendYtCommand("setVolume", [Math.min(100, Math.max(0, vol))]);
+    }, 200);
+
+    return () => clearInterval(fadeInterval);
   });
 
   const ytParams = new URLSearchParams({
@@ -637,28 +838,26 @@ function YouTubeClipEmbed({
   const ytEmbedUrl = `https://www.youtube.com/embed/${videoId}?${ytParams.toString()}`;
 
   return (
-    <div
-      className={
-        showVideo
-          ? "rounded-xl overflow-hidden bg-black aspect-video w-full"
-          : "w-px h-px overflow-hidden opacity-0 pointer-events-none absolute"
-      }
-    >
+    <div className="w-px h-px overflow-hidden opacity-0 pointer-events-none absolute">
       <iframe
         ref={iframeRef}
         key={`${videoId}-${startSec}-${reloadCount}`}
         src={ytEmbedUrl}
         title={`Audio de ${songLabel}`}
-        width="100%"
-        height="100%"
+        width="200"
+        height="200"
         allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
         onLoad={() => {
-          // Ensure YouTube jumps to startSec immediately after iframe load
+          cycleStartRef.current = Date.now();
+          sendYtCommand("setVolume", [0]);
           if (startSec > 0) {
-            setTimeout(seekToStart, 350);
+            setTimeout(() => {
+              seekToStart();
+            }, 300);
           }
         }}
-        className="border-0 w-full h-full"
+        onError={() => setReloadCount((c) => c + 1)}
+        className="border-0 w-[200px] h-[200px]"
       />
     </div>
   );
